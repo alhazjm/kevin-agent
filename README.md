@@ -2,6 +2,8 @@
 
 Telegram bot + Gmail webhook → tool-calling agent → Google Sheets ledger. A personal-finance LLM agent built around the Singapore context, deployed to a $7/mo Render box.
 
+Note: This is the cleaned, public core of the agent I run in production daily. Production build: 27 tools · 250+ tests; this repo carries the core loop with its own test suite.
+
 ---
 
 ## What it does
