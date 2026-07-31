@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+node_modules/
+auth_state/
+google_token.json
+service-account*.json
+.clasp.json
+*.log
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+notes/
+
+# Real e-statement PDFs for recon/ — full card numbers, never commit
+samples/
+
+# Tier-2 memory: the REAL files carry names, card last-4s and goals.
+# Only the .example templates belong in git.
+hermes-config/USER.md
+hermes-config/MEMORY.md
+hermes-config/SOUL.md

@@ -1,0 +1,13 @@
+{
+  "name": "Kevin",
+  "short_name": "Kevin",
+  "description": "Your budget, at a glance.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F3F7FE",
+  "theme_color": "#F3F7FE",
+  "icons": [
+    { "src": "./kevin-icon.png", "sizes": "432x432", "type": "image/png", "purpose": "any" }
+  ]
+}

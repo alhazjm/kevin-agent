@@ -1,0 +1,2166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" id="themeMeta" content="#F3F7FE">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kevin">
+<title>Kevin.</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./kevin-icon.png">
+<link rel="icon" type="image/png" href="./kevin-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Nunito:wght@500..800&display=swap" rel="stylesheet">
+<!-- Card livery — vendored from github.com/alhazjm/cards. Local copies, not a
+     CDN: this is an offline-capable PWA and a third-party fetch on the render
+     path would be both a network hop and a runtime dependency. Re-sync with
+     pwa/vendor/sync-cards.sh. -->
+<link rel="stylesheet" href="./vendor/cards.css">
+<script src="./vendor/cards.global.js"></script>
+<!-- vendored + pinned (was cdn.jsdelivr.net @2 floating — executing whatever
+     the CDN serves that day is a supply-chain hole for a page holding an auth
+     session). Upgrade = download dist/umd/supabase.js at the new version into
+     vendor/ and update both script tags (index.html, budget.html). -->
+<script src="./vendor/supabase-2.111.0.js"></script>
+<style>
+/* ————— Kevin redesign (claude.ai/design "Kevin Redesign") —————
+   Two themes as CSS vars; body[data-theme=midnight] flips them. */
+:root{
+  --bg:#F3F7FE; --ink:#0C1B33; --mut:#5D6E88; --ter:#93A2B9; --faint:#AFBDD1;
+  --hair:rgba(12,27,51,.08); --hair2:rgba(12,27,51,.16); --hairS:rgba(12,27,51,.24);
+  --track:#E4EBF6; --ghost:#D3DDEC; --notch:rgba(12,27,51,.3); --ring:#F3F7FE;
+  --dock:rgba(255,255,255,.75); --dockline:rgba(12,27,51,.08);
+  --acc:#1E55E0; --accOn:#FFFFFF; --segBg:#FFFFFF; --segInk:#0C1B33;
+  --idleBar:#CBD7E8; --over:#D14479; --near:#E8912D; --dockIdle:rgba(12,27,51,.45);
+  --areaOp:.09; --hdrbg:#F3F7FE;
+  --sans:'Instrument Sans',-apple-system,'Segoe UI',Roboto,sans-serif;
+  --disp:'Nunito','Instrument Sans',sans-serif;
+}
+body[data-theme=midnight]{
+  --bg:linear-gradient(175deg,#13245E 0%,#0C1840 52%,#080F2E 100%);
+  --ink:#F0F4FF; --mut:rgba(240,244,255,.75); --ter:rgba(240,244,255,.5);
+  --faint:rgba(240,244,255,.42); --hair:rgba(240,244,255,.1);
+  --hair2:rgba(240,244,255,.22); --hairS:rgba(240,244,255,.35);
+  --track:rgba(240,244,255,.14); --ghost:rgba(240,244,255,.3);
+  --notch:rgba(240,244,255,.55); --ring:#0C1840;
+  --dock:rgba(16,26,64,.75); --dockline:rgba(240,244,255,.16);
+  --acc:#86ADFF; --accOn:#0C1840; --segBg:#24356E; --segInk:#F0F4FF;
+  --idleBar:rgba(240,244,255,.22); --over:#F06292; --near:#EFB43F;
+  --dockIdle:rgba(240,244,255,.55); --areaOp:.16; --hdrbg:#13245E;
+}
+*{box-sizing:border-box; margin:0; padding:0}
+html{background:#F3F7FE}
+html:has(body[data-theme=midnight]){background:#0C1840}
+body{
+  background:var(--bg); background-attachment:fixed; color:var(--ink);
+  font-family:var(--sans); line-height:1.45; min-height:100svh;
+  -webkit-font-smoothing:antialiased; transition:color .3s;
+}
+button{font-family:inherit}
+.wrap{
+  max-width:480px; margin:0 auto;
+  padding:calc(14px + env(safe-area-inset-top,0px)) 0 calc(130px + env(safe-area-inset-bottom,0px));
+}
+/* phone: the column wrappers dissolve into normal flow */
+.colL,.colR{display:contents}
+[hidden]{display:none !important}
+
+/* ————— desktop: fixed header bar, full-width chart, budgets|cards,
+   activity full width. One flowing page instead of four boxes. ————— */
+@media (min-width: 980px){
+  /* plain fixed header: page-coloured (no glass card, no border), inner
+     edges aligned to the content grid rather than the viewport.
+     #app prefix outranks the base header rule that appears later on. */
+  #app header{
+    position:fixed; top:0; left:0; right:0; z-index:40;
+    padding:16px max(24px, calc((100vw - 1048px) / 2 + 24px));
+    background:var(--hdrbg);
+  }
+  #app footer{grid-column:1 / -1; margin-top:48px}
+  .wrap{
+    max-width:1048px; display:grid; grid-template-columns:1fr 1fr;
+    column-gap:56px; align-items:start;
+    padding:86px 24px 60px;   /* clears the fixed header */
+  }
+  .mnav,.hero,.chart,#insight,#insightrule,#tape,footer{grid-column:1 / -1}
+  #insight{text-align:center; max-width:640px; justify-self:center}
+  /* Two-column zone: budgets left, trip+cards right. Both sides stretch to
+     the shared row height so the boxed outlines bottom-align — whichever
+     side is taller sets the height, the other's border grows to match
+     (content stays top-anchored; the breathing room is the design).
+     With no active trip, budgets and cards share ONE row — a blanket
+     grid-row:span 2 would leave an empty second row and cards stretching
+     to only half the height, so the span applies via :has() only when the
+     trip block is actually visible (then budgets spans trip+cards). */
+  #budgets{grid-column:1}
+  #tripblock,#cards{grid-column:2}
+  /* IOU sits AFTER cards in the DOM so grid auto-placement never
+     leaves a hole beside budgets; both wide blocks span the row */
+  #ioublock,#subsblock{grid-column:1 / -1}
+  #budgets,#tripblock,#cards{align-self:stretch}
+  .wrap:has(#tripblock:not([hidden])) #budgets{grid-row:span 2}
+  footer{margin-top:48px}
+  #dockwrap{display:none !important}
+  /* boxed sections: hairline outline only, deliberately no fill — the sky
+     gradient stays the background so the boxes read as drawn on the page,
+     not laid over it. Desktop only: phones keep the flowing borderless
+     column (this whole block is inside the min-width query). The budget
+     rows' -24px bleed now runs exactly to the box edge, so row hover
+     fills the full box width. */
+  #budgets,#tripblock,#cards,#tape,#ioublock,#subsblock{
+    border:1px solid var(--hair2); border-radius:20px;
+    margin-top:26px; padding:22px 24px 22px;
+  }
+}
+
+/* ————— header + month nav ————— */
+header{display:flex; align-items:center; justify-content:space-between; padding:0 24px}
+.brand{font-family:var(--disp); font-size:18px; font-weight:800; letter-spacing:-.01em}
+.brand i{font-style:normal; color:var(--acc)}
+.hbtns{display:flex; align-items:center; gap:8px}
+#darkbtn{width:30px; height:30px; border-radius:999px; border:1px solid var(--hair2);
+  background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0}
+#darkbtn svg path{stroke:var(--mut)}
+#mytd{font-size:11.5px; font-weight:600; padding:5px 12px; border-radius:999px;
+  border:1px solid var(--hair2); background:transparent; color:var(--mut); cursor:pointer}
+#mytd.on{background:var(--acc); color:var(--accOn); border-color:transparent}
+.mnav{display:flex; align-items:center; justify-content:center; gap:12px; margin-top:16px}
+.mnav button{border:0; background:none; font-size:18px; line-height:1; color:var(--ter);
+  cursor:pointer; padding:2px 8px}
+.mnav button:disabled{opacity:.25; cursor:default}
+#mlabel{font-size:14px; font-weight:600; letter-spacing:.01em; min-width:110px;
+  text-align:center; font-variant-numeric:tabular-nums; display:inline-flex;
+  align-items:center; justify-content:center; gap:6px}
+#mlabel.live::before,#mlabel.stale::before{content:""; width:6px; height:6px;
+  border-radius:999px; background:#2FA26A; flex:0 0 auto}
+#mlabel.stale::before{background:var(--near)}
+
+/* ————— hero ————— */
+.hero{text-align:center; margin-top:8px; padding:0 24px}
+.hlabel{font-size:13px; color:var(--mut)}
+.hval{font-family:var(--disp); font-size:56px; font-weight:700; letter-spacing:-.02em;
+  line-height:1.05; margin-top:5px; font-variant-numeric:tabular-nums}
+.hval small{font-size:26px; font-weight:600; letter-spacing:0; color:var(--faint)}
+/* over-budget alarm state (renderPulse toggles .ov / emits .ovtxt) */
+.hval.ov{color:var(--over)}
+.hval.ov small{color:var(--over); opacity:.55}
+/* gentle throb on the alarm label only — the big number stays still
+   (a pulsing dollar figure reads as panic, a pulsing label as a status
+   light). Pure-CSS opacity, GPU-cheap, PWA-safe; honours reduced-motion. */
+@keyframes ovthrob{0%,100%{opacity:1}50%{opacity:.5}}
+.hlabel.ov{color:var(--over); font-weight:600; animation:ovthrob 2.4s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){.hlabel.ov{animation:none}}
+.hsub .ovtxt{color:var(--over); font-weight:600}
+.hsub{font-size:13.5px; color:var(--mut); margin-top:8px; text-wrap:pretty}
+.hsub b{color:var(--ink); font-weight:600}
+
+/* ————— chart ————— */
+.chart{margin-top:20px}
+.seg{display:inline-flex; background:var(--track); border-radius:10px; padding:2px; gap:2px}
+.seg button{font-size:12px; border:0; border-radius:8px; padding:5px 14px; cursor:pointer;
+  background:transparent; color:var(--ter); font-weight:500}
+.seg button.on{background:var(--segBg); color:var(--segInk); font-weight:600;
+  box-shadow:0 1px 2px rgba(0,0,0,.18)}
+/* pan-y lets vertical page scrolling pass through; horizontal drags scrub */
+#pacesvg{display:block; width:100%; height:auto; margin-top:4px;
+  touch-action:pan-y; cursor:crosshair; user-select:none; -webkit-user-select:none}
+.axis{display:flex; justify-content:space-between; padding:6px 20px 0; font-size:10px; color:var(--ter)}
+
+/* ————— insight ————— */
+#insight{padding:18px 24px 0; font-size:14px; line-height:1.55; color:var(--ink); text-wrap:pretty}
+#insight button{border:0; background:none; padding:0; font:inherit; font-weight:600;
+  text-decoration:underline; text-underline-offset:3px; cursor:pointer; color:var(--acc)}
+#insightrule{height:1px; background:var(--hair); margin:20px 24px 0}
+
+/* ————— sections ————— */
+section{padding:30px 24px 0}
+.shead{display:flex; justify-content:space-between; align-items:baseline}
+.shead .t{font-size:11px; font-weight:650; letter-spacing:.12em; color:var(--ter)}
+.shead .tmeta{font-weight:500; letter-spacing:.02em; text-transform:none;
+  margin-left:9px; padding-left:10px; border-left:1px solid var(--hair2)}
+.shead .agg{font-size:11px; color:var(--ter)}
+.shead .agg a{color:var(--ter); text-decoration:underline; text-underline-offset:3px}
+.shead a{font-size:11px; color:var(--acc); text-decoration:none}
+.shead a:hover{text-decoration:underline}
+
+/* budgets */
+#budget-rows{margin-top:4px}
+.brow{padding:13px 24px 14px; margin:0 -24px; cursor:pointer; transition:background .4s}
+.brow + .brow{border-top:1px solid var(--hair)}
+.brow.sel{background:color-mix(in srgb, var(--acc) 8%, transparent)}
+.brow.flash{background:color-mix(in srgb, var(--acc) 18%, transparent)}
+.brow .l1{display:flex; align-items:center; gap:8px}
+.brow .dot{width:6px; height:6px; border-radius:99px; flex:0 0 auto}
+.brow .name{font-size:14.5px; letter-spacing:-.01em; min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.brow .amt{margin-left:auto; font-size:13px; color:var(--mut); font-variant-numeric:tabular-nums; flex:0 0 auto}
+.brow .amt b{color:var(--ink); font-weight:600}
+.meterline{position:relative; height:4px; border-radius:99px; background:var(--track); margin-top:10px}
+.meterline i{position:absolute; left:0; top:0; bottom:0; border-radius:99px; min-width:3px;
+  background:var(--acc); transition:width .5s}
+.meterline i.near{background:var(--near)} .meterline i.over{background:var(--over)}
+/* "no budget set" rows have no denominator — an empty track, not a full
+   red bar (their pct is a sorting-only 100) */
+.meterline i.unb{background:transparent; min-width:0}
+.meterline .notch{position:absolute; top:-3px; bottom:-3px; width:2px; border-radius:2px; background:var(--notch)}
+.brow .status{font-size:11px; margin-top:6px; text-align:right; font-variant-numeric:tabular-nums; color:var(--over)}
+#btoggle{display:block; width:100%; border:0; background:none; font-size:12.5px;
+  color:var(--mut); padding:13px 0 2px; cursor:pointer}
+/* IOU rows (loans table, migration 0005) */
+.iourow{display:flex; align-items:baseline; gap:10px; padding:12px 0; border-top:1px solid var(--hair)}
+.iourow:first-child{border-top:0}
+.iourow .who{font-size:14.5px; letter-spacing:-.01em}
+.iourow .when{font-size:11.5px; color:var(--ter)}
+.iourow .amt{margin-left:auto; font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; flex:0 0 auto}
+.paidbtn{border:1px solid var(--hairS); background:none; color:var(--mut); font-size:11.5px;
+  padding:4px 10px; border-radius:99px; cursor:pointer; flex:0 0 auto}
+.paidbtn:disabled{opacity:.5; cursor:default}
+/* trip pot line under the bucket rings */
+.potline{grid-column:1/-1; font-size:11.5px; color:var(--ter); padding-top:8px}
+/* subscriptions — derived, deterministic (see calcSubs) */
+.subrow{display:flex; align-items:center; gap:11px; padding:11px 0; border-top:1px solid var(--hair)}
+.subrow:first-child{border-top:0}
+.subrow.dim .subname, .subrow.dim .subamt{opacity:.55}
+.subchip{flex:0 0 auto; width:30px; height:30px; border-radius:9px; display:flex; align-items:center;
+  justify-content:center; font-size:11.5px; font-weight:700; letter-spacing:.02em}
+.subname{font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.subname .subnote{display:block; font-size:11px; color:var(--ter); font-weight:400}
+.subname .subnote b.pc{color:var(--near); font-weight:600}
+.subamt{margin-left:auto; font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; flex:0 0 auto}
+.subx{border:0; background:none; color:var(--ter); font-size:12px; cursor:pointer;
+  padding:4px 2px; flex:0 0 auto; opacity:.55}
+.subx:hover{opacity:1}
+.subx:disabled{opacity:.3; cursor:default}
+#subsadd{display:block; width:100%; border:0; background:none; font-size:12px;
+  color:var(--ter); padding:12px 0 2px; cursor:pointer}
+#subspick{margin-top:10px; width:100%; font:inherit; font-size:13px; padding:6px 8px;
+  border:1px dashed var(--hairS); border-radius:8px; background:none; color:var(--ink)}
+/* mobile: hairline dividers ahead of the stacked info sections — the
+   borderless flow made IOU / subscriptions / activity read as one blur
+   (Hadi, 2026-08-01). Content-inset like #insightrule; desktop keeps
+   its boxed outlines instead (the min-width block). */
+@media (max-width: 979px){
+  #ioublock::before,#subsblock::before{content:""; display:block; height:1px;
+    background:var(--hair2); margin-bottom:28px}
+  #tape::before{content:""; display:block; height:1px;
+    background:var(--hair2); margin:0 24px 28px}
+}
+#dock button[hidden]{display:none}
+
+/* trip */
+#trip-rows{display:grid; grid-template-columns:1fr 1fr; gap:2px 16px; margin-top:8px}
+.ringcard{display:flex; gap:11px; align-items:center; padding:9px 0}
+.ringcard .t1{font-size:13px; font-weight:600; text-transform:capitalize}
+.ringcard .t2{font-size:11.5px; color:var(--ter); font-variant-numeric:tabular-nums; margin-top:2px}
+
+/* cards — surface from vendor/cards.css (.mc-card), content from us.
+   Two deliberate departures from the library's shipped tile:
+   (1) --mc-aspect:auto, because our tiles size to their content rather than
+       to the ID-1 card ratio — we put an amount, a cycle and up to three
+       meters on them;
+   (2) the library's __body is a space-between flex column, which we flatten
+       back to normal flow so the existing margin-top rhythm still applies. */
+#card-rows{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px}
+.card{--mc-aspect:auto; --mc-padding:13px 14px 12px; --mc-crest-fade:72%;
+  cursor:pointer; min-width:0; transition:box-shadow .25s}
+.card .mc-card__body{height:auto; display:block}
+.card.sel{box-shadow:0 0 0 2px var(--acc), 0 4px 12px rgba(11,20,36,.14)}
+/* Keep every piece of content inside the washed column, so nothing sits on
+   live motif. Same guarantee the library gives its own name element. */
+.card .mc-card__body > *{max-width:var(--mc-text-column)}
+/* The title row spans the full tile so the last4 sits in the top-right
+   corner (the crest's vertical mask keeps motif faint up there); the NAME
+   keeps the text-column cap via flex so it still ellipsizes on the wash. */
+.card .top{display:flex; justify-content:space-between; align-items:baseline; gap:6px;
+  max-width:100%}
+/* Motifs are authored with fixed mark pitch (wave rings every 12px) but
+   percent extent — at Kevin's tile sizes the crest box is half the demo
+   card's, so wave rendered as a few oversized arcs. Render the crest at
+   its designed scale (150px wide, the reference card's crest) and let
+   smaller tiles crop it; scale-free families (facet, panel) are unmoved. */
+.card .mc-card__crest{width:min(150px, 82%)}
+.card .cn{font-size:12px; font-weight:650; color:var(--mc-t-title);
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.card .num{font-family:ui-monospace,Menlo,monospace; font-size:9.5px; flex:0 0 auto;
+  color:var(--mc-t-detail)}
+.card .cv{font-size:21px; font-weight:650; letter-spacing:-.01em; margin-top:10px;
+  font-variant-numeric:tabular-nums; color:var(--mc-t-strong)}
+.card .cyc{font-size:9.5px; margin-top:2px; font-variant-numeric:tabular-nums;
+  color:var(--mc-t-muted)}
+/* The tile's big number + dates are STATEMENT-cycle (what the bank app
+   shows); every meter below is calendar-month reward math (pools, caps,
+   partner spend, min-spends). One zone label states that once, instead
+   of "cal." noise on every caption — Hadi 2026-07-31, "less confusing". */
+.card .mdiv{margin-top:8px; padding-top:5px; border-top:1px solid var(--mc-bar-track);
+  font-size:8px; font-weight:650; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--mc-t-muted); max-width:100%; white-space:nowrap}
+.card .mdiv + .meter{margin-top:4px}
+.card .meter{height:4px; border-radius:99px; margin-top:9px}
+.card .meter i{display:block; height:100%; border-radius:99px; min-width:3px}
+/* Notes may run past the library's 74% text column: the motif alphas are
+   bounded, so AA still holds on the unwashed side (the library's own
+   documented trade-off) — and at tile width the captions need the room.
+   .pnote is a pool caption glued under its own meter: one line, never
+   wrapped, so the meter/caption/meter/caption rhythm stays legible. */
+.card .note{font-size:10px; margin-top:6px; line-height:1.35; max-width:100%;
+  color:var(--mc-t-muted)}
+.card .pnote{font-size:10px; margin-top:4px; line-height:1.3; max-width:100%;
+  white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--mc-t-muted)}
+/* Content-height tiles are taller than the card ratio the motifs were drawn
+   for; cards v1.1.0 pins the crest to its designed proportion by default
+   (--mc-crest-aspect) so the artwork can't stretch — the one thing a
+   consumer sets is where the shortened crest fades out. This replaces the
+   hand-rolled crest override that restated the library's mask (which would
+   silently diverge the moment the mask changed upstream). */
+
+/* ————— tape: clean list ————— */
+#tapelist .range{display:inline-flex}
+/* three-way range seg: tighter buttons so Day|14d|Month fits a 402px
+   viewport beside the ACTIVITY title */
+.range button{padding:5px 10px}
+.filtrow{display:flex; align-items:center; gap:8px; margin-top:12px}
+.filtrow .pill{font-size:12px; font-weight:600; padding:5px 11px; border-radius:999px;
+  color:var(--acc); background:color-mix(in srgb, var(--acc) 12%, transparent)}
+.filtrow button{border:0; background:none; font-size:12px; color:var(--mut); cursor:pointer; padding:4px 6px}
+.dayrow{display:flex; justify-content:space-between; align-items:baseline; padding:18px 0 5px}
+.dayrow .dl{font-size:10.5px; font-weight:650; letter-spacing:.08em; color:var(--ter)}
+.dayrow .dt{font-size:11px; color:var(--ter); font-variant-numeric:tabular-nums}
+.trow{display:flex; align-items:center; gap:10px; padding:10.5px 0; border-bottom:1px solid var(--hair)}
+.trow .m{font-size:14.5px; letter-spacing:-.01em; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; flex:0 1 auto}
+.trow .catbtn{border:0; background:none; padding:0; font-size:11px; letter-spacing:.02em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto; min-width:0;
+  max-width:38%; color:var(--mut); border-bottom:1px dotted var(--hairS); cursor:pointer}
+.trow .catbtn.mut{color:var(--ter); border-bottom:0; cursor:default}
+/* inline quick-categorize: pending rows swap the "pending" chip for a
+   dropdown of EXISTING Budget categories (mirrors the agent-side
+   snap-or-refuse rule — no creation here; splits/renames/learning stay
+   conversational with Kevin) */
+.trow select.catpick{font:inherit; font-size:11px; letter-spacing:.02em;
+  flex:0 1 auto; min-width:0; max-width:38%; padding:1px 2px;
+  border:1px dashed var(--hairS); border-radius:6px;
+  background:transparent; color:var(--mut); cursor:pointer}
+.trow select.catpick:disabled{opacity:.5; cursor:progress}
+.trow select.catpick option{background:var(--segBg); color:var(--segInk)}
+.trow .a{margin-left:auto; flex:0 0 auto; font-size:14.5px; font-variant-numeric:tabular-nums}
+.trow .a.mut{color:var(--ter)}
+.tempty{padding:22px 0 6px; font-size:12.5px; color:var(--ter); text-align:center}
+.sumline{display:flex; justify-content:space-between; align-items:baseline; padding:14px 0 0}
+.sumline .i{font-size:11.5px; color:var(--ter)}
+.sumline .v{font-size:16px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums}
+.treconcile{padding-top:5px; font-size:10.5px; color:var(--ter); text-align:right;
+  font-variant-numeric:tabular-nums}
+
+/* ————— tape: receipt mode ————— */
+#tapereceipt{padding:0 16px; filter:drop-shadow(0 6px 14px rgba(11,20,36,.15))}
+.tear{height:5px;
+  background:url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='8'%20height='5'%3E%3Cpath%20d='M0%200%20H8%20L4%205%20Z'%20fill='%23FFFEFA'/%3E%3C/svg%3E") 0 0/8px 5px repeat-x}
+.tear.top{transform:scaleY(-1)}
+.paper{background:#FFFEFA; color:#23272B; padding:18px 16px 20px;
+  font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+.paper .h1{text-align:center; font-size:13px; font-weight:700; letter-spacing:.22em}
+.paper .h2{text-align:center; font-size:9.5px; color:#8A8F86; letter-spacing:.14em; margin-top:3px}
+.paper .h3{text-align:center; font-size:9px; color:#AAB0A6; letter-spacing:.06em; margin-top:6px}
+.paper .rfilt{display:flex; justify-content:center; align-items:center; gap:10px; margin-top:9px;
+  border:1px dashed rgba(35,39,43,.35); padding:5px 8px; font-size:9.5px; letter-spacing:.08em}
+.paper .rfilt button{font-size:9.5px; letter-spacing:.08em; border:0; background:none;
+  cursor:pointer; color:#6A7264; padding:0; font-family:inherit}
+.paper .rule{border-top:1px dashed rgba(35,39,43,.3); margin:10px 0 4px}
+.paper .rday{display:flex; justify-content:space-between; align-items:baseline; padding:9px 0 3px;
+  font-size:9.5px; color:#7C8177; letter-spacing:.1em; font-weight:700; font-variant-numeric:tabular-nums}
+.paper .rrow{display:flex; align-items:baseline; gap:8px; padding:5px 0}
+.paper .rrow .m{font-size:11.5px; font-weight:700; letter-spacing:.02em; text-transform:uppercase;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto}
+.paper .rrow button{border:0; background:none; padding:0; font-family:inherit; font-size:9.5px;
+  letter-spacing:.07em; text-transform:uppercase; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; flex:0 1 auto; min-width:0; max-width:38%; color:#6A7264;
+  border-bottom:1px solid rgba(35,39,43,.35); cursor:pointer}
+.paper .rrow button.mut{color:#9AA091; border-bottom:0; cursor:default}
+.paper .rrow .a{margin-left:auto; flex:0 0 auto; font-size:11.5px; font-variant-numeric:tabular-nums}
+.paper .rrow .a.mut{color:#9AA091}
+.paper .rempty{padding:14px 0; font-size:11px; letter-spacing:.06em; color:#6A7264; text-align:center}
+.paper .rrange{display:block; width:100%; font-family:inherit; font-size:9.5px; letter-spacing:.12em;
+  color:#6A7264; background:none; border:0; border-top:1px dashed rgba(35,39,43,.2);
+  padding:9px 0 2px; cursor:pointer; text-align:center; margin-top:6px}
+.paper .sumrow{display:flex; align-items:baseline; margin-top:4px}
+.paper .sumrow .lbl{font-size:10px; letter-spacing:.08em; color:#6A7264}
+.paper .sumrow .lead{flex:1; border-bottom:1px dotted rgba(35,39,43,.35); margin:0 6px;
+  align-self:flex-end; transform:translateY(-3px)}
+.paper .sumrow .val{font-size:10px; color:#6A7264; font-variant-numeric:tabular-nums}
+.paper .sumrow.total .lbl{font-size:11px; color:#23272B; font-weight:700}
+.paper .sumrow.total .val{font-size:13.5px; font-weight:700; color:#23272B}
+#tapemode{border:0; background:none; font-size:10.5px; font-weight:600; letter-spacing:.1em;
+  color:var(--ter); cursor:pointer; padding:14px 10px 0; display:block; margin:0 auto}
+
+/* ————— footer ————— */
+footer{margin-top:32px; text-align:center; padding:0 24px}
+.fb{font-family:var(--disp); font-size:13.5px; font-weight:800; color:var(--mut)}
+.fb i{font-style:normal; color:var(--acc)}
+.fm{font-size:11px; color:var(--ter); margin-top:4px}
+.flinks{margin-top:10px; font-size:12px}
+.flinks a,.flinks button{color:var(--mut); text-decoration:none; border:0; background:none;
+  font-size:12px; cursor:pointer; padding:0}
+.flinks a:hover,.flinks button:hover{color:var(--ink)}
+.flinks .sep{color:var(--faint); margin:0 8px}
+
+/* ————— dock nav ————— */
+#dockwrap{position:fixed; left:0; right:0; bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  display:flex; justify-content:center; pointer-events:none; z-index:30}
+#dock{pointer-events:auto; display:flex; gap:4px; padding:5px; border-radius:999px;
+  background:var(--dock); backdrop-filter:blur(16px) saturate(1.4);
+  -webkit-backdrop-filter:blur(16px) saturate(1.4); border:1px solid var(--dockline);
+  box-shadow:0 8px 24px rgba(11,20,36,.16)}
+#dock button{width:46px; height:46px; border-radius:999px; border:0; background:transparent;
+  cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .25s}
+#dock button.on{background:var(--acc)}
+#dock button svg path{stroke:var(--dockIdle)}
+#dock button.on svg path{stroke:var(--accOn)}
+
+/* ————— auth gate ————— */
+.gate{max-width:320px; margin:24vh auto 0; text-align:center; padding:0 24px}
+.gate .gb{font-family:var(--disp); font-size:30px; font-weight:800}
+.gate .gb i{font-style:normal; color:var(--acc)}
+.gate p{font-size:13.5px; color:var(--mut); margin-top:10px; text-wrap:pretty}
+.gate input{width:100%; margin-top:14px; font:inherit; font-size:15px; padding:11px 14px;
+  border:1px solid var(--hair2); border-radius:12px; background:var(--segBg); color:var(--ink);
+  text-align:center}
+.gate input:focus{outline:2px solid var(--acc); border-color:transparent}
+.gate button.go{width:100%; margin-top:10px; font:inherit; font-size:14px; font-weight:600;
+  padding:11px; border:0; border-radius:12px; background:var(--acc); color:var(--accOn); cursor:pointer}
+.gate button.go:disabled{opacity:.6}
+.gate .gnote{font-size:12px; color:var(--ter); margin-top:12px; min-height:16px}
+.gate .gnote.err{color:var(--over)}
+#codewrap input{letter-spacing:.35em; font-variant-numeric:tabular-nums; font-size:20px}
+</style>
+</head>
+<body>
+
+<div class="gate" id="gate" hidden>
+  <div class="gb">Kevin<i>.</i></div>
+  <p id="gate-msg">Your budget, your eyes only.</p>
+  <div id="emailwrap">
+    <input id="gate-email" type="email" inputmode="email" autocomplete="email" placeholder="you@email.com">
+    <button class="go" id="gate-send">Email me a sign-in code</button>
+  </div>
+  <div id="codewrap" hidden>
+    <input id="gate-code" type="text" inputmode="numeric" autocomplete="one-time-code"
+           maxlength="8" placeholder="000000">
+    <button class="go" id="gate-verify">Sign in</button>
+  </div>
+  <div class="gnote" id="gate-note"></div>
+</div>
+
+<div class="wrap" id="app" hidden>
+
+<div class="colL">
+
+<header id="pulse">
+  <span class="brand">Kevin<i>.</i></span>
+  <span class="hbtns">
+    <button id="darkbtn" aria-label="toggle dark mode">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path id="modeicon" d=""
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="mytd">YTD</button>
+  </span>
+</header>
+
+<div class="mnav">
+  <button id="mprev" aria-label="previous month">‹</button>
+  <span id="mlabel">loading…</span>
+  <button id="mnext" aria-label="next month">›</button>
+</div>
+
+<div class="hero">
+  <div class="hlabel" id="p-label">…</div>
+  <div class="hval" id="p-hero">…</div>
+  <div class="hsub" id="p-sub"></div>
+</div>
+
+<div class="chart">
+  <svg viewBox="0 0 402 176" id="pacesvg"></svg>
+  <div class="axis"><span id="axisL"></span><span id="axisR"></span></div>
+</div>
+
+<div id="insight" hidden></div>
+<div id="insightrule" hidden></div>
+
+</div>
+
+<div class="colR">
+
+<section id="budgets">
+  <div class="shead">
+    <span class="t">BUDGETS<span class="tmeta" id="bagg"></span></span>
+    <span class="agg"><a href="./budget.html" id="bedit" hidden>edit</a></span>
+  </div>
+  <div id="budget-rows"></div>
+  <button id="btoggle" hidden></button>
+</section>
+
+<section id="tripblock" hidden>
+  <div class="shead">
+    <span class="t" id="trip-title">TRIP</span>
+    <span class="agg" id="trip-agg"></span>
+  </div>
+  <div id="trip-rows"></div>
+</section>
+
+<section id="cards">
+  <div class="shead">
+    <span class="t">CARDS<span class="tmeta">statement cycle</span></span>
+  </div>
+  <div id="card-rows"></div>
+</section>
+
+<section id="ioublock" hidden>
+  <div class="shead">
+    <span class="t">IOU<span class="tmeta">until paid back</span></span>
+    <span class="agg" id="iou-agg"></span>
+  </div>
+  <div id="iou-rows"></div>
+</section>
+
+<section id="subsblock" hidden>
+  <div class="shead">
+    <span class="t">SUBSCRIPTIONS<span class="tmeta">recurring · detected</span></span>
+    <span class="agg" id="subs-agg"></span>
+  </div>
+  <div id="subs-rows"></div>
+  <button id="subsadd">+ declare one the alerts can't see</button>
+  <select id="subspick" hidden aria-label="declare a category as a subscription"></select>
+</section>
+
+<section id="tape" style="padding-left:0;padding-right:0">
+  <div id="tapelist" style="padding:0 24px">
+    <div class="shead">
+      <span class="t">ACTIVITY</span>
+      <span class="seg range" id="rangeseg">
+        <button id="range-today">Day</button>
+        <button id="range-all">14d</button>
+        <button id="range-month">Month</button>
+      </span>
+    </div>
+    <div class="filtrow" id="filtbox" hidden>
+      <span class="pill">Filtering · <span id="filtname"></span></span>
+      <button id="filtclear">✕ Clear</button>
+    </div>
+    <div id="tape-rows"></div>
+    <div class="sumline"><span class="i" id="titems"></span><span class="v" id="ttotal"></span></div>
+    <div class="treconcile" id="trec" hidden></div>
+  </div>
+  <div id="tapereceipt" hidden>
+    <div class="tear top"></div>
+    <div class="paper" id="paperbody"></div>
+    <div class="tear"></div>
+  </div>
+  <button id="tapemode">VIEW AS RECEIPT</button>
+</section>
+
+</div>
+
+<footer>
+  <div class="fb">Kevin<i>.</i></div>
+  <div class="fm" id="f-sync">…</div>
+  <div class="flinks"><a href="./budget.html" id="beditfoot" hidden>edit budgets</a><span
+    class="sep" id="fsep" hidden>·</span><button id="signout" hidden>sign out</button></div>
+</footer>
+
+</div>
+
+<div id="dockwrap" hidden>
+  <div id="dock" aria-label="sections">
+    <button data-go="pulse" class="on" aria-label="Pulse"><svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M4 11.2 L12 4.6 L20 11.2 M6.4 9.6 V19.4 H17.6 V9.6" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button data-go="budgets" aria-label="Budgets"><svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M5.5 19.5 V12.5 M12 19.5 V6.5 M18.5 19.5 V15.5" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button data-go="cards" aria-label="Cards"><svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M3.8 7.2 H20.2 V17.4 H3.8 Z M3.8 10.6 H20.2" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button data-go="subsblock" aria-label="Subscriptions" hidden><svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M5.2 10.2 A 7 7 0 0 1 18.4 8.2 M18.8 4.6 V 8.4 H 15 M18.8 13.8 A 7 7 0 0 1 5.6 15.8 M5.2 19.4 V 15.6 H 9" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button data-go="tape" aria-label="Tape"><svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M6.5 4 H17.5 V20 L15.3 18.6 L13.1 20 L10.9 18.6 L8.7 20 L6.5 18.6 Z M9.4 9 H14.6 M9.4 12.4 H14.6" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
+</div>
+
+<script>
+/* ————— config: the publishable key is PUBLIC by design (RLS + auth
+   protect the data); the secret/service key must NEVER appear here ————— */
+const SUPABASE_URL = "__SUPABASE_URL__";
+const SUPABASE_PUBLISHABLE_KEY = "__SUPABASE_PUBLISHABLE_KEY__";
+
+const $ = s => document.querySelector(s);
+const fmt = n => (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt0 = n => (n < 0 ? "-$" : "$") + Math.round(Math.abs(n)).toLocaleString("en-SG");
+/* limits keep their cents when they have any — fmt0's rounding showed a
+   $3.98 iCloud limit as "$4", making a correct 100%-used red row look
+   like a false alarm next to Spotify's real $12.00 at 99.8% amber
+   (Hadi, 2026-07-31) */
+const fmtLimit = n => Number.isInteger(n) ? fmt0(n) : fmt(n);
+const slug = c => "bud-" + c.toLowerCase().replace(/[^a-z0-9]+/g,"-");
+/* LOCAL wall-clock date, never UTC. toISOString() renders UTC, which is
+   yesterday until 8am SGT — "today" filters, the TODAY tape label, and the
+   current-month key were all a day behind every morning. Txn dates are SGT
+   wall-clock strings from the bank, so the device's local date is the one
+   they should be compared against. */
+const isoDate = d => d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0")
+  + "-" + String(d.getDate()).padStart(2,"0");
+const curMonthKey = () => isoDate(new Date()).slice(0,7);
+const PENDING = "UNCATEGORIZED";
+const TRANSFER_CATS = new Set(["youtrip top-up"]);
+const LENDING_CATS = new Set(["lending"]);   // the IOU card owns these, not the budget bars
+const TRIP_TAG_RE = /\[trip:([^\]]+)\]/;     // reader twin of travel_mode's [trip:] writer
+/* YouTrip SPENDS (the iOS-Shortcut alert source; payment_method carries
+   "YouTrip") are pot-internal: the top-up already counted as the outflow
+   when it left the bank, and the shared physical card means alerts can
+   never see every spend anyway. Pot spends fill trip buckets and show in
+   the tape (✈) but never enter monthly totals — counting both the top-up
+   and the spend would double-count the same dollar. */
+const isYtSpend = t => (t.payment_method || "").toLowerCase().includes("youtrip");
+const escH = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+const MONNAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+const IS_FILE = location.protocol === "file:";
+let sb = null;
+
+/* ————— data model filled by loadData(); shapes match the DB rows ————— */
+const D = { txns: [], budgets: [], cards: [], trips: [], loans: [],
+            subExcl: new Set(), subIncl: new Set(), insight: null, syncedAt: null };
+let state = {
+  filter:null, label:"", budgetsOpen:false, flashCat:null,
+  tapeRange:"today", scrub:null,
+  tapeMode: localStorage.getItem("kv-tape") || "clean",
+  view: { mode:"month", month: curMonthKey() },
+};
+let PCHART = null;   // geometry of the last-rendered pace chart, for scrubbing
+
+/* ————— theme ————— */
+function applyTheme(t){
+  document.body.dataset.theme = t;
+  localStorage.setItem("kv-theme", t);
+  $("#themeMeta").content = t === "midnight" ? "#13245E" : "#F3F7FE";
+  $("#modeicon").setAttribute("d", t === "midnight"
+    ? "M12 7.5 A4.5 4.5 0 1 0 12.01 7.5 M12 3.2 V1.6 M12 22.4 V20.8 M3.2 12 H1.6 M22.4 12 H20.8 M5.8 5.8 L4.7 4.7 M19.3 19.3 L18.2 18.2 M5.8 18.2 L4.7 19.3 M19.3 4.7 L18.2 5.8"
+    : "M20 13.8 A8.2 8.2 0 1 1 10.2 4 A6.8 6.8 0 0 0 20 13.8 Z");
+}
+applyTheme(localStorage.getItem("kv-theme") || "sky");
+$("#darkbtn").addEventListener("click", () =>
+  applyTheme(document.body.dataset.theme === "midnight" ? "sky" : "midnight"));
+
+/* ————— card livery — the Muted Card System (vendor/cards.global.js).
+   Replaces the hand-authored gradient map this file used to carry: it covered
+   5 cards, every new card needed a bespoke gradient, and five of its six
+   liveries put text below the 4.5:1 AA floor somewhere on their own
+   background — worst at uob-pref's 3.38:1, in the top-left corner the name
+   sits in. The library gives a banded base plus a lightness-only motif, and
+   exports text colours contrast-checked against every base it ships.
+
+   We supply the CONTENT (amount, cycle, meters); the library supplies the
+   SURFACE and the text tokens to put content on it. Using --mc-t-* rather
+   than hardcoded colours is what keeps the contrast guarantee. */
+const MCS = window.MutedCardSystem || null;
+
+/* resolveCard() also matches on display name, but 'dbs-yuu' is ambiguous —
+   the Amex and Visa twins share a name stem and a motif by design. Pin our
+   ids explicitly so the mapping can never silently move. */
+const LIVERY_ID = {
+  "uob-pref":    "uob-preferred",
+  "uob-one":     "uob-one",
+  "dbs-yuu":     "dbs-yuu-visa",
+  "dbs-vantage": "dbs-vantage",
+  "hsbc-revo":   "hsbc-revolution",
+};
+/* Unknown card -> a plain Paper tile. Same shape as a catalogue record, so it
+   flows through cardCssText() unchanged. */
+const LIVERY_FALLBACK = { band:"paper", base:"oklch(0.955 0.005 250)", motif:"plain" };
+
+/* Cash·PayLah is not a catalogue card — a quiet POSB-blue paper tile
+   (Hadi: "muted blue of the posb colour"). Same record shape as the
+   fallback, so it flows through cardCssText unchanged. */
+const CASH_LIVERY = { band:"paper", base:"oklch(0.905 0.05 262)", motif:"plain" };
+
+/* Cash pseudo-card: PayLah! debit spending on a calendar-month window
+   (cycle day 1 → the 1st-to-EOM tracking Hadi asked for). Deliberately NOT
+   a row in the cards table — the card optimiser must keep skipping PayLah
+   as unmapped_payment_method; this tile is a PWA-side view only. It rides
+   the normal card pipeline (cycle window, spend calc, tape filter) and
+   falls to the paper livery since no catalogue entry matches. */
+const CASH_CARD = {
+  card_id: "cash-paylah", display_name: "Cash · PayLah",
+  payment_method_pattern: "PayLah! Wallet (Mobile ending 9876)",
+  cycle_start_day: 1,
+};
+
+function liveryVars(c){
+  // If the vendored file ever fails to load, fall through to the stylesheet's
+  // own defaults rather than throwing — the cards section still renders, just
+  // unstyled. A missing livery must never take the dashboard down.
+  if (!MCS) return "";
+  const hit = c.card_id === "cash-paylah" ? CASH_LIVERY
+    : (LIVERY_ID[c.card_id] && MCS.resolveCard(LIVERY_ID[c.card_id]))
+    || MCS.resolveCard(c.display_name)
+    || MCS.resolveCard(c.card_id)
+    || LIVERY_FALLBACK;
+  // The chevron motif (uob-one's zigzag) is an SVG data URL — the one value
+  // cardCssText emits with literal double quotes. We inject this string into
+  // a double-quoted style="" attribute via innerHTML, where an unescaped
+  // quote ends the attribute and silently drops --mc-motif and every var
+  // after it. The library's own demo is immune (it assigns style.cssText via
+  // JS); any innerHTML consumer must escape. The HTML parser decodes &quot;
+  // back to a real quote before CSS ever sees the value.
+  return MCS.cardCssText(hit).replace(/"/g, "&quot;");
+}
+
+/* online-class merchants — mirrors card_optimiser._ONLINE_4MPD_PATTERNS.
+   Splits UOB Preferred's calendar spend into its two S$600 pools
+   (contactless / online); bank alerts never carry the channel, so
+   merchant class is the attribution (assumptions: always Apple Pay
+   in person, online non-recurring). */
+const ONLINE_PATTERNS = ["SHOPEE","LAZADA","AMAZON","GRAB","KLOOK","BOOKING",
+  "AGODA","FLYSCOOT","SCOOT","TRIP.COM","EXPEDIA","NETFLIX","SPOTIFY",
+  "MICROSOFT","LINKEDIN"];
+const isOnlineMerchant = m =>
+  ONLINE_PATTERNS.some(p => (m || "").toUpperCase().includes(p));
+
+/* yuu partner merchants — bank-alert spellings of the issuer's published
+   partner set (Cold Storage banners, Giant, Guardian,
+   7-Eleven, foodpanda, Gojek, SimplyGo, CHAGEE, Singtel, Charge+).
+   Feeds the second dbs-yuu meter: partner spend is what the 18% tier
+   actually pays on, capped at 28,800 pts ≈ S$822.86 a calendar month,
+   and the tier needs txns at ≥4 DISTINCT partners. Deterministic
+   substring match, same discipline as the agent side — no LLM. */
+const YUU_PARTNER_PATTERNS = ["COLD STORAGE","CS FRESH","JASONS","GIANT",
+  "GUARDIAN","7-ELEVEN","7 ELEVEN","SEVEN ELEVEN","FOODPANDA","PANDAMART",
+  "GOJEK","SIMPLYGO","BUS/MRT","CHAGEE","SINGTEL","CHARGE+"];
+const YUU_PARTNER_CAP = 823;   // S$ of partner spend ≈ the 28,800-pt cap
+const isYuuPartner = m =>
+  YUU_PARTNER_PATTERNS.some(p => (m || "").toUpperCase().includes(p));
+/* The 4-merchant gate counts PARTNERS, not patterns: the Cold Storage
+   banners (CS Fresh, Jasons) are one merchant per the issuer's T&Cs, and
+   spelling/sub-brand variants of one partner must not double count. */
+const YUU_PARTNER_ALIAS = {"CS FRESH":"COLD STORAGE","JASONS":"COLD STORAGE",
+  "7 ELEVEN":"7-ELEVEN","SEVEN ELEVEN":"7-ELEVEN","PANDAMART":"FOODPANDA",
+  "BUS/MRT":"SIMPLYGO"};
+const distinctYuuPartners = merchants => new Set(merchants.flatMap(m => {
+  const up = (m || "").toUpperCase();
+  return YUU_PARTNER_PATTERNS.filter(p => up.includes(p))
+    .map(p => YUU_PARTNER_ALIAS[p] || p);
+})).size;
+
+/* ————— cycle window (port of card_optimiser._cycle_window) ————— */
+function cycleWindow(csd, asOf){
+  const clamp = (y,m,d) => new Date(Date.UTC(y, m, Math.min(d, new Date(Date.UTC(y, m+1, 0)).getUTCDate())));
+  const y = asOf.getUTCFullYear(), m = asOf.getUTCMonth();
+  const curStart = clamp(y, m, csd);
+  let start, nextStart;
+  if (asOf >= curStart){ start = curStart; nextStart = clamp(y, m+1, csd); }
+  else { start = clamp(y, m-1, csd); nextStart = curStart; }
+  const end = new Date(nextStart.getTime() - 86400000);
+  return [start, end];
+}
+const shortDate = d => d.toLocaleDateString("en-SG",{day:"numeric",month:"short",timeZone:"UTC"});
+
+/* ————— view resolution: which month (or YTD) the page shows ————— */
+const VIEWCACHE = {};
+let CURVD = { txns: [], budgets: [] };
+
+async function resolveView(){
+  const cur = curMonthKey();
+  const v = state.view;
+  if (v.mode === "month" && v.month === cur){
+    return { txns: D.txns.filter(t => t.date.startsWith(cur)), budgets: D.budgets };
+  }
+  if (!sb) return { txns: [], budgets: [] };   // sample mode has no history
+  const key = v.mode === "ytd" ? "ytd:" + cur.slice(0,4) : "m:" + v.month;
+  if (VIEWCACHE[key]) return VIEWCACHE[key];
+  const SEL = "date,txn_time,merchant,amount,category,source,payment_method,notes,txn_id";
+  let out;
+  if (v.mode === "ytd"){
+    const y = cur.slice(0,4);
+    const [tx, bg] = await Promise.all([
+      sb.from("transactions").select(SEL).gte("date", y + "-01-01")
+        .order("date",{ascending:false}).order("id",{ascending:false}).limit(5000),
+      sb.from("budgets").select("category,month,limit_amount").like("month", y + "-%"),
+    ]);
+    if (tx.error || bg.error) throw new Error((tx.error || bg.error).message);
+    out = { txns: tx.data, budgets: bg.data };
+  } else {
+    const [yy, mm] = v.month.split("-").map(Number);
+    const [ny, nm] = mm === 12 ? [yy+1, 1] : [yy, mm+1];
+    const [tx, bg] = await Promise.all([
+      sb.from("transactions").select(SEL)
+        .gte("date", v.month + "-01")
+        .lt("date", ny + "-" + String(nm).padStart(2,"0") + "-01")
+        .order("date",{ascending:false}).order("id",{ascending:false}).limit(2000),
+      sb.from("budgets").select("category,month,limit_amount").eq("month", v.month),
+    ]);
+    if (tx.error || bg.error) throw new Error((tx.error || bg.error).message);
+    out = { txns: tx.data, budgets: bg.data };
+  }
+  VIEWCACHE[key] = out;
+  return out;
+}
+
+/* ————— derived calcs, all client-side over the resolved view ————— */
+function calc(){
+  const now = new Date();
+  const curMonth = isoDate(now).slice(0,7);
+  const v = state.view;
+  const ytd = v.mode === "ytd";
+  const isCur = !ytd && v.month === curMonth;
+  const vTxns = CURVD.txns || [];
+  const vBudgets = CURVD.budgets || [];
+
+  const real = vTxns.filter(t => t.category.trim().toUpperCase() !== PENDING);
+  // pending = actionable only; backfill statement imports are not (M14)
+  const pendingCount = vTxns.filter(t =>
+    t.category.trim().toUpperCase() === PENDING &&
+    (t.source||"").toLowerCase() !== "backfill").length;
+  // AGGREGATE spend counts every row — pending included. An uncategorized
+  // transaction is still money that left the account; excluding it
+  // overstated "Left to spend" by the whole pending pile (Hadi,
+  // 2026-07-31: "the chart is understating… does that help my
+  // spending?" — it didn't). Transfers (YouTrip top-ups) stay counted:
+  // the top-up is THE outflow moment and the single counting point
+  // (settled 2026-08-01 — the shared physical card means Shortcut
+  // alerts can never see every YouTrip spend, so the once-planned
+  // "flip" is dead; pot spends are excluded instead, see isYtSpend).
+  // Per-CATEGORY bars keep using `real`: a category bar cannot include
+  // rows that have no category.
+  const spent = vTxns.filter(t => !isYtSpend(t))
+    .reduce((s,t) => s + Number(t.amount), 0);
+
+  // YTD starts at the first month with data, not January: the ledger
+  // began mid-year, and a flat-zero runway before it says nothing
+  // (Hadi, 2026-08-01: "i dont want to see jan when i know my jan txns
+  // are not coming in"). Axis, series, and budget total all share it.
+  let ytdStart = now.getMonth() + 1;
+  if (ytd) for (const t of vTxns){
+    const m = parseInt(t.date.slice(5,7), 10);
+    if (m >= 1 && m < ytdStart) ytdStart = m;
+  }
+  const ytdStartMonth = curMonth.slice(0,4) + "-" + String(ytdStart).padStart(2,"0");
+
+  // budget totals: one month's rows, or (YTD) months since the ledger began
+  let budgetTotal = 0;
+  const limitByCat = {};
+  if (ytd){
+    for (const b of vBudgets){
+      if (b.month <= curMonth && b.month >= ytdStartMonth){
+        limitByCat[b.category] = (limitByCat[b.category] || 0) + Number(b.limit_amount);
+        budgetTotal += Number(b.limit_amount);
+      }
+    }
+  } else {
+    for (const b of vBudgets){
+      limitByCat[b.category] = Number(b.limit_amount);
+      budgetTotal += Number(b.limit_amount);
+    }
+  }
+
+  // series for the chart: days of the viewed month, or months of the year
+  const [vy, vm] = ytd ? [now.getFullYear(), now.getMonth()+1]
+                       : v.month.split("-").map(Number);
+  const daysInMonth = new Date(vy, (ytd ? 12 : vm), 0).getDate();
+  const day = isCur ? now.getDate() : daysInMonth;
+  let series, seriesLen;
+  if (ytd){
+    const curIdx = now.getMonth() + 1;
+    seriesLen = curIdx - ytdStart + 1;
+    series = Array.from({length: seriesLen}, () => 0);
+    for (const t of vTxns){   // same counting rule as `spent` above
+      if (isYtSpend(t)) continue;
+      const m = parseInt(t.date.slice(5,7), 10);
+      if (m >= ytdStart && m <= curIdx) series[m - ytdStart] += Number(t.amount);
+    }
+  } else {
+    seriesLen = day;
+    series = Array.from({length: day}, () => 0);
+    for (const t of vTxns){   // same counting rule as `spent` above
+      if (isYtSpend(t)) continue;
+      const d = parseInt(t.date.slice(8,10), 10);
+      if (d >= 1 && d <= day) series[d-1] += Number(t.amount);
+    }
+  }
+
+  const spendByCat = {};
+  const tripByLabel = {};
+  for (const t of D.trips) tripByLabel[t.label] = t;
+  for (const t of real){
+    if (isYtSpend(t)) continue;          // pot-internal — see isYtSpend
+    let cat = t.category;
+    // a [trip:x]-tagged top-up is outflow FOR that trip: its bar is the
+    // trip category's, not "YouTrip Top-up" — so funding past the plan
+    // shows as an ordinary red bar in the month it happened
+    if (TRANSFER_CATS.has(cat.toLowerCase())){
+      const m = TRIP_TAG_RE.exec(t.notes || "");
+      if (m && tripByLabel[m[1]]) cat = tripByLabel[m[1]].trip_category;
+    }
+    spendByCat[cat] = (spendByCat[cat]||0) + Number(t.amount);
+  }
+
+  const budgets = Object.keys(limitByCat)
+    // Lending is money out (counted in `spent`, netted by negative
+    // repayments) but never a budget — the IOU card owns it
+    .filter(cat => !LENDING_CATS.has(cat.toLowerCase()))
+    .map(cat => ({ cat, limit: limitByCat[cat],
+                   spent: +(spendByCat[cat]||0).toFixed(2) }))
+    .filter(b => b.limit > 0 || b.spent > 0)
+    .map(b => ({...b, pct: b.limit > 0 ? b.spent/b.limit*100 : (b.spent > 0 ? 100 : 0)}))
+    // ties broken by dollar overage then name: the many pct=100 rows
+    // ($0 budgets, exactly-at-limit) otherwise render in arbitrary
+    // Postgres row order — the insight pick and the collapsed top-6
+    // would shuffle between loads
+    .sort((a,b) => b.pct - a.pct
+      || (b.spent - b.limit) - (a.spent - a.limit)
+      || a.cat.localeCompare(b.cat));
+  const unbudgeted = Object.keys(spendByCat)
+    .filter(c => limitByCat[c] === undefined && !LENDING_CATS.has(c.toLowerCase()))
+    .map(c => ({cat: c, limit: 0, spent: +spendByCat[c].toFixed(2), pct: 100}));
+
+  const youtrip = real.filter(t => TRANSFER_CATS.has(t.category.toLowerCase()))
+    .reduce((s,t) => s + Number(t.amount), 0);
+
+  // cards + trip are ALWAYS "now" — statement cycles and active trips are
+  // anchored to today regardless of which month the page is viewing
+  const cards = D.cards.map(c => {
+    const [start, end] = cycleWindow(c.cycle_start_day || 1,
+      new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
+    const pat = (c.payment_method_pattern || "").toLowerCase().trim();
+    const mine = t => pat &&
+      t.category.trim().toUpperCase() !== PENDING &&
+      (t.source||"").toLowerCase() !== "backfill" &&
+      t.payment_method.toLowerCase().includes(pat);
+    const inCycle = D.txns.filter(t =>
+      mine(t) && t.date >= isoDate(start) && t.date <= isoDate(end));
+    const inCalMonth = D.txns.filter(t => mine(t) && t.date.startsWith(curMonth));
+    return { ...c, start, end,
+             spent: inCycle.reduce((s,t) => s + Number(t.amount), 0),
+             spentCal: inCalMonth.reduce((s,t) => s + Number(t.amount), 0),
+             spentCalOnline: inCalMonth.filter(t => isOnlineMerchant(t.merchant))
+               .reduce((s,t) => s + Number(t.amount), 0),
+             // yuu's 18% tier: partner-only calendar spend + the
+             // distinct-partner count for its 4-merchant gate
+             spentCalPartner: inCalMonth.filter(t => isYuuPartner(t.merchant))
+               .reduce((s,t) => s + Number(t.amount), 0),
+             partnersCal: distinctYuuPartners(inCalMonth.map(t => t.merchant)) };
+  });
+
+  const today = isoDate(now);
+  const trip = D.trips.find(t => t.start_date <= today && today <= t.end_date) || null;
+  let buckets = [];
+  if (trip){
+    const alloc = {};
+    for (const part of (trip.budget_map||"").split(";")){
+      const [k,val] = part.split("=").map(s => (s||"").trim());
+      if (k && val && !isNaN(parseFloat(val))) alloc[k.toLowerCase()] = parseFloat(val);
+    }
+    const tripTx = D.txns.filter(t => t.category === trip.trip_category);
+    const perBucket = {};
+    for (const t of tripTx){
+      const m = /\[bucket:([a-z0-9_-]+)\]/i.exec(t.notes || "");
+      const b = m ? m[1].toLowerCase() : "untagged";
+      perBucket[b] = (perBucket[b]||0) + Number(t.amount);
+    }
+    buckets = Object.keys(alloc).map(b => ({
+      name: b, limit: alloc[b], spent: +(perBucket[b]||0).toFixed(2),
+      pct: alloc[b] > 0 ? (perBucket[b]||0)/alloc[b]*100 : 0,
+    }));
+    if (perBucket.untagged) buckets.push({
+      name: "untagged", limit: 0, spent: +perBucket.untagged.toFixed(2), pct: 100});
+  }
+  // the pot is DERIVED: funded = sum of [trip:label]-tagged top-ups, so
+  // a mid-trip transfer grows it with nothing to reconcile; potSpent =
+  // tracked YouTrip taps inside the trip window. Both read D.txns
+  // ("now"-anchored ~100 days, like cards) — a trip funded further back
+  // undercounts, which is why the UI copy says "tracked".
+  let funded = 0, potSpent = 0;
+  if (trip){
+    for (const t of D.txns){
+      if (TRANSFER_CATS.has((t.category||"").toLowerCase())){
+        const m = TRIP_TAG_RE.exec(t.notes || "");
+        if (m && m[1] === trip.label) funded += Number(t.amount);
+      } else if (isYtSpend(t) && t.date >= trip.start_date && t.date <= trip.end_date){
+        potSpent += Number(t.amount);
+      }
+    }
+  }
+
+  // the tape shows the viewed month (YTD keeps it on the current month)
+  const tapeTxns = ytd ? D.txns.filter(t => t.date.startsWith(curMonth)) : vTxns;
+  const monthName = ytd ? vy + " YTD"
+    : new Date(vy, vm-1, 1).toLocaleDateString("en-SG",{month:"long"});
+
+  return { ytd, isCur, viewMonth: ytd ? curMonth : v.month,
+           curMonth, day, daysInMonth, spent, budgetTotal,
+           left: budgetTotal - spent,
+           daysLeft: isCur ? Math.max(1, daysInMonth - day + 1) : 0,
+           series, seriesLen, ytdStart,
+           budgets, unbudgeted, pendingCount, youtrip, cards, trip, buckets,
+           funded, potSpent,
+           tapeTxns, monthName, yearLabel: String(vy) };
+}
+
+/* ————— rendering ————— */
+const sevClass = p => p >= 100 ? "over" : p >= 80 ? "near" : "";
+const sevVar = p => p >= 100 ? "var(--over)" : p >= 80 ? "var(--near)" : "var(--acc)";
+
+// Catmull-Rom → bezier with per-segment y clamping (no fake overshoot)
+function smooth(pts){
+  if (pts.length < 2) return "";
+  let d = "M " + pts[0][0].toFixed(1) + " " + pts[0][1].toFixed(1);
+  for (let i = 0; i < pts.length-1; i++){
+    const p0 = pts[Math.max(0,i-1)], p1 = pts[i], p2 = pts[i+1], p3 = pts[Math.min(pts.length-1,i+2)];
+    const lo = Math.min(p1[1],p2[1]), hi = Math.max(p1[1],p2[1]);
+    const c1y = Math.min(Math.max(p1[1]+(p2[1]-p0[1])/6,lo),hi);
+    const c2y = Math.min(Math.max(p2[1]-(p3[1]-p1[1])/6,lo),hi);
+    d += " C " + (p1[0]+(p2[0]-p0[0])/6).toFixed(1) + " " + c1y.toFixed(1)
+       + ", " + (p2[0]-(p3[0]-p1[0])/6).toFixed(1) + " " + c2y.toFixed(1)
+       + ", " + p2[0].toFixed(1) + " " + p2[1].toFixed(1);
+  }
+  return d;
+}
+
+function renderPulse(C){
+  const left = C.left;
+  // split from TOTAL cents, not floor+round on the raw float — a sum
+  // landing at 4.9999999999998 would otherwise render "$4.100"
+  const totalCents = Math.round(Math.abs(left) * 100);
+  const whole = Math.floor(totalCents / 100), cents = totalCents % 100;
+  // One over-budget alarm rule, applied consistently (Hadi 2026-07-31,
+  // "colour alerts without changing it too much"): when the window's
+  // budget is spent, the hero number + label, the "fully used" phrase,
+  // and the chart's line/dot/spent-label all switch to --over. No
+  // near-state colouring here — the budget rows already carry amber.
+  // half-cent epsilon: budget exactly equal to spend must not flip to
+  // "Over budget −$0.00" on float noise in the multi-term sums
+  const isOver = left <= -0.005;
+  $("#p-label").classList.toggle("ov", isOver);
+  $("#p-hero").classList.toggle("ov", isOver);
+  $("#p-label").textContent = C.ytd ? "Left vs budget"
+    : isOver ? (C.isCur ? "Over budget" : "Went over")
+    : C.isCur ? "Left to spend" : "Left over";
+  $("#p-hero").innerHTML = (isOver ? "−" : "")
+    + "$" + whole.toLocaleString("en-SG")
+    + `<small>.${String(cents).padStart(2,"0")}</small>`;
+  if (C.isCur){
+    $("#p-sub").innerHTML = left > 0
+      ? `that's <b>${fmt(left / C.daysLeft)} a day</b> for the last <b>${C.daysLeft} day${C.daysLeft>1?"s":""}</b>`
+      : `<span class="ovtxt">budget fully used</span> with ${C.daysLeft} day${C.daysLeft>1?"s":""} to go`;
+  } else if (C.ytd){
+    $("#p-sub").innerHTML = `spent <b>${fmt(C.spent)}</b> across ${C.seriesLen} month${C.seriesLen>1?"s":""}`;
+  } else {
+    $("#p-sub").innerHTML = !isOver
+      ? `closed <b>${fmt(Math.max(left, 0))}</b> under budget`
+      : `closed <b>${fmt(-left)}</b> over budget`;
+  }
+
+  // pace chart: smooth cumulative line + straight budget ghost + today dot.
+  // Scrubbing (drag) moves a marker along the line showing that day's
+  // spend; releasing filters the tape to that day (YTD: opens that month).
+  // viewBox width tracks the rendered width so text keeps its CSS size on
+  // any screen — 402 on phones, ~1000 when the chart spans the desktop grid
+  const svgEl = $("#pacesvg");
+  const W = Math.max(402, Math.round((svgEl.getBoundingClientRect().width || 402)));
+  svgEl.setAttribute("viewBox", "0 0 " + W + " 176");
+  const padX=20, padT=30, padB=26, H=176, X1=W-20, plotH=H-padT-padB;
+  const maxY = (Math.max(C.budgetTotal, C.spent) || 1) * 1.05;
+  const y = val => padT + (1 - val/maxY) * plotH;
+  // YTD axis spans only the months the ledger covers (ytdStart..now), so
+  // the budget ghost's endpoint sits at the last DISPLAYED month — the
+  // elapsed-months budget total compared at the right x. (Previously the
+  // ghost ran to a December endpoint while the total covered Jan–now:
+  // the line crossed it and read as over-pace while comfortably under.)
+  const N = Math.max(C.ytd ? C.seriesLen : C.daysInMonth, 2);
+  const x = i => padX + (i-1)/(N-1) * (X1-padX);
+  PCHART = { N, len: C.series.length, padX, X1, W };
+  let run = 0;
+  const pts = C.series.map((val,i) => { run += val; return [x(i+1), y(run)]; });
+  const lineD = smooth(pts);
+  const areaD = lineD ? lineD
+    + ` L ${pts[pts.length-1][0].toFixed(1)} ${y(0).toFixed(1)}`
+    + ` L ${pts[0][0].toFixed(1)} ${y(0).toFixed(1)} Z` : "";
+  const [tx,ty] = pts.length ? pts[pts.length-1] : [padX, y(0)];
+  const live = C.isCur || C.ytd;
+  const mn = C.ytd ? "" : MONNAMES[+C.viewMonth.slice(5,7)-1];
+  const scrub = state.scrub && state.scrub <= pts.length ? state.scrub : null;
+  // Label placement: budget figure rides the ghost line's end, spent
+  // figure hugs the dot. When the dot closes in on the ghost end near the
+  // right edge the two fight for the same corner — the loser dodges:
+  // under budget → spent drops below the dot; over budget → the budget
+  // figure ducks under the ghost line instead.
+  // Over-pace colouring: the whole spend line (and its dot + label) turns
+  // --over once cumulative spend crosses the budget ghost.
+  const chartOver = C.budgetTotal > 0 && C.spent > C.budgetTotal;
+  const lineCol = chartOver ? "var(--over)" : "var(--acc)";
+  const spentCol = chartOver ? "var(--over)" : "var(--ink)";
+  const gy = y(C.budgetTotal);
+  let budLabY = gy - 8;
+  let slx = tx - 14, sly = ty - 12;
+  if (X1 - tx < 96 && Math.abs(ty - gy) < 26){
+    if (C.spent >= C.budgetTotal) budLabY = Math.max(gy + 18, ty + 26);
+    else sly = ty + 24;
+  }
+  const dot = (cx,cy) => `
+    <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="11" style="fill:${lineCol}" opacity=".14"/>
+    <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="7" style="fill:${lineCol}" opacity=".28"/>
+    <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4.5"
+      style="fill:${lineCol};stroke:var(--ring)" stroke-width="2"/>`;
+  let marker;
+  if (scrub){
+    const [sx, sy] = pts[scrub-1];
+    const labX = Math.min(Math.max(sx, 42), W - 42);
+    marker = `
+      <line x1="${sx.toFixed(1)}" x2="${sx.toFixed(1)}" y1="${(sy+7).toFixed(1)}" y2="150"
+        style="stroke:var(--hairS)" stroke-dasharray="2 3"/>
+      ${dot(sx, sy)}
+      <text x="${labX.toFixed(1)}" y="${(sy-14).toFixed(1)}" text-anchor="middle"
+        font-size="12" font-weight="650" style="fill:var(--ink)">${fmt(C.series[scrub-1] || 0)}</text>
+      <text x="${sx.toFixed(1)}" y="168" text-anchor="middle" font-size="9.5"
+        style="fill:var(--ter)">${C.ytd ? MONNAMES[C.ytdStart+scrub-2] : scrub + " " + mn}</text>`;
+  } else {
+    marker = `
+      ${live ? `<line x1="${tx.toFixed(1)}" x2="${tx.toFixed(1)}" y1="${(ty+7).toFixed(1)}" y2="150"
+        style="stroke:var(--hairS)" stroke-dasharray="2 3"/>` : ""}
+      ${dot(tx, ty)}
+      <text x="${slx.toFixed(1)}" y="${sly.toFixed(1)}" text-anchor="end"
+        font-size="12" font-weight="650" style="fill:${spentCol}">${fmt0(C.spent)}</text>
+      ${live ? `<text x="${tx.toFixed(1)}" y="168" text-anchor="middle" font-size="9.5"
+        style="fill:var(--ter)">${C.ytd ? MONNAMES[C.ytdStart+C.seriesLen-2] : "today"}</text>` : ""}`;
+  }
+  $("#pacesvg").innerHTML = `
+    <defs><linearGradient id="kvA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:${lineCol};stop-opacity:var(--areaOp)"/>
+      <stop offset="1" style="stop-color:${lineCol};stop-opacity:0"/>
+    </linearGradient></defs>
+    <path d="M ${padX} ${y(0).toFixed(1)} L ${X1} ${y(C.budgetTotal).toFixed(1)}"
+      style="stroke:var(--ghost)" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <text x="${X1}" y="${budLabY.toFixed(1)}" text-anchor="end"
+      font-size="11" style="fill:var(--ter)">${fmt0(C.budgetTotal)}</text>
+    ${areaD ? `<path d="${areaD}" fill="url(#kvA)"/>` : ""}
+    ${lineD ? `<path d="${lineD}" style="stroke:${lineCol}" stroke-width="3" fill="none"
+      stroke-linecap="round" stroke-linejoin="round"/>` : ""}
+    ${marker}`;
+
+  if (C.ytd){
+    $("#axisL").textContent = MONNAMES[C.ytdStart-1];
+    $("#axisR").textContent = MONNAMES[C.ytdStart+C.seriesLen-2];
+  } else {
+    $("#axisL").textContent = "1 " + mn;
+    $("#axisR").textContent = C.daysInMonth + " " + mn;
+  }
+}
+
+/* one deterministic insight line; falls back to a hairline divider.
+   Priority: pending → over budget → spend spike → near cap → YTD pace. */
+function renderInsight(C){
+  let text = "", cta = "", target = null;
+  // $0-limit rows with spending count as over (they ARE budgets — see
+  // renderBudgets); unbudgeted categories never appear in C.budgets.
+  const over = C.budgets.filter(b => b.pct >= 100 && (b.limit > 0 || b.spent > 0));
+  const near = C.budgets.filter(b => b.limit > 0 && b.pct >= 80 && b.pct < 100);
+  // spike: today/yesterday vs the median of this month's earlier active days
+  let spike = null;
+  if (C.isCur && !C.ytd && C.series.length >= 7){
+    const past = C.series.slice(0, -2).filter(v => v > 0).sort((a,b) => a-b);
+    const median = past.length >= 4 ? past[Math.floor(past.length/2)] : 0;
+    const yv = C.series[C.series.length-2] || 0, tv = C.series[C.series.length-1] || 0;
+    const cand = tv >= yv ? {label:"Today", v:tv} : {label:"Yesterday", v:yv};
+    if (median > 0 && cand.v >= 2.5*median && cand.v >= 100)
+      spike = `${cand.label} hit ${fmt(cand.v)} — about ${Math.round(cand.v/median)}× your typical day.`;
+  }
+  if (C.pendingCount){
+    text = `${C.pendingCount} transaction${C.pendingCount>1?"s":""} still need${C.pendingCount>1?"":"s"} a category — tell Kevin on Telegram.`;
+  } else if (!C.ytd && C.isCur && over.length){
+    const b = over[0];
+    text = `${b.cat} ${over.length>1 ? `and ${over.length-1} other${over.length>2?"s":""} are` : "is"} over budget.`;
+    cta = "Review it"; target = b.cat;
+  } else if (!C.ytd && !C.isCur && over.length){
+    const b = over[0];
+    // dollar framing, not % — "0% over" for at-limit rows contradicted
+    // itself, and $0-limit rows (pct pinned to 100) have no meaningful %
+    const overAmt = b.spent - b.limit;
+    text = overAmt >= 0.005
+      ? `${b.cat} closed ${fmt(overAmt)} over in ${C.monthName}.`
+      : `${b.cat} closed right at its limit in ${C.monthName}.`;
+    cta = "See it"; target = b.cat;
+  } else if (spike){
+    text = spike;
+  } else if (!C.ytd && C.isCur && D.insight && D.insight.insight &&
+             Date.now() - new Date(D.insight.date + "T00:00:00").getTime() < 8*DAY_MS){
+    // Kevin's own nightly insight, when nothing urgent outranks it.
+    // escH is load-bearing: this is the only #insight branch whose text
+    // isn't built locally — it can quote merchant strings that arrived
+    // via email, and #insight renders through innerHTML.
+    text = escH(D.insight.insight);
+  } else if (!C.ytd && C.isCur && near.length){
+    const b = near[0];
+    text = `${b.cat} is at ${Math.min(99, Math.round(b.pct))}% with ${C.daysLeft} day${C.daysLeft>1?"s":""} left.`;
+    cta = "Watch it"; target = b.cat;
+  } else if (C.ytd){
+    text = C.left >= 0 ? `You are pacing ${fmt0(C.left)} under budget this year.`
+                       : `You are pacing ${fmt0(-C.left)} over budget this year.`;
+  }
+  $("#insight").hidden = !text;
+  $("#insightrule").hidden = !!text;
+  if (text){
+    $("#insight").innerHTML = text + (cta ? ` <button id="insightcta">${cta}</button>` : "");
+    if (cta) $("#insightcta").addEventListener("click", () => jumpToCat(target));
+  }
+}
+
+function renderBudgets(C){
+  const all = [...C.budgets, ...C.unbudgeted.map(u => ({...u, unb:true}))];
+  const visible = state.budgetsOpen ? all : all.slice(0,6);
+  const paceLeft = (C.day / C.daysInMonth * 100).toFixed(1);
+  $("#budget-rows").innerHTML = visible.map(b => {
+    const sel = state.filter && state.filter.cat === b.cat;
+    const flash = state.flashCat === b.cat;
+    // "no budget set" means NO budgets row exists (unb). An explicit $0
+    // limit is a real budget — any spending on it is over budget, and the
+    // row reads "$X / $0 · $X over" (Hadi 2026-07-31: "0 doesn't mean no
+    // budget set").
+    const noBudget = !!b.unb;
+    const zeroOver = !b.unb && b.limit === 0 && b.spent > 0;
+    const over = (b.limit > 0 && b.pct >= 100) || zeroOver;
+    const near = b.limit > 0 && b.pct >= 80 && !over;
+    return `<div class="brow ${sel?"sel":""} ${flash?"flash":""}" id="${slug(b.cat)}"
+      role="button" tabindex="0" aria-label="filter tape by ${b.cat}" data-cat="${b.cat}">
+      <div class="l1">
+        ${over||near ? `<span class="dot" style="background:${over?"var(--over)":"var(--near)"}"></span>` : ""}
+        <span class="name">${b.cat}</span>
+        <span class="amt"><b>${fmt(b.spent)}</b>${noBudget ? "" : " / " + fmtLimit(b.limit)}</span>
+      </div>
+      <div class="meterline">
+        <i class="${noBudget ? "unb" : sevClass(b.pct)}" style="width:${Math.min(b.pct,100)}%" data-fill></i>
+        ${C.isCur && !noBudget && b.limit > 0 ? `<span class="notch" style="left:calc(${paceLeft}% - 1px)"></span>` : ""}
+      </div>
+      ${over && b.spent - b.limit >= 0.005 ? `<div class="status">${fmt(b.spent-b.limit)} over</div>`
+        : noBudget ? `<div class="status" style="color:var(--ter)">no budget set</div>` : ""}
+    </div>`;
+  }).join("") || `<div style="padding:14px 0;font-size:13px;color:var(--ter)">no budgets for this month yet — tell Kevin</div>`;
+  $("#btoggle").hidden = all.length <= 6;
+  $("#bagg").textContent = C.isCur ? `day ${C.day} of ${C.daysInMonth}`
+    : C.ytd ? `${MONNAMES[C.ytdStart-1]} – ${MONNAMES[C.ytdStart+C.seriesLen-2]}` : `${C.monthName} · closed`;
+  $("#btoggle").textContent = state.budgetsOpen ? "Show less" : "Show all " + all.length;
+}
+
+const CIRC = 2 * Math.PI * 17;
+function renderTrip(C){
+  $("#tripblock").hidden = !C.trip;
+  if (!C.trip) return;
+  $("#trip-title").textContent = "TRIP · " + C.trip.label.toUpperCase();
+  // once top-ups are tagged, the header reads funded vs planned; the
+  // funded figure goes red past the plan (Hadi's scenario: planned
+  // $1,000, transferred $1,800 — both surfaces must show it)
+  const planned = Number(C.trip.total_budget);
+  $("#trip-agg").innerHTML = C.funded > 0
+    ? `funded <b${C.funded > planned && planned > 0 ? ' style="color:var(--over)"' : ""}>${fmt0(C.funded)}</b> · planned ${fmt0(planned)}`
+    : fmt0(planned) + " pot";
+  $("#trip-rows").innerHTML = C.buckets.map(t => `
+    <div class="ringcard">
+      <svg width="44" height="44" viewBox="0 0 44 44" style="flex:0 0 auto">
+        <circle cx="22" cy="22" r="17" fill="none" style="stroke:var(--track)" stroke-width="4.5"/>
+        <circle cx="22" cy="22" r="17" fill="none" style="stroke:${sevVar(t.pct)}" stroke-width="4.5"
+          stroke-linecap="round" stroke-dasharray="${(Math.min(t.pct,100)/100*CIRC).toFixed(1)} ${CIRC.toFixed(1)}"
+          transform="rotate(-90 22 22)"/>
+        <text x="22" y="25.5" text-anchor="middle" font-size="10" font-weight="650"
+          style="fill:var(--ink)">${Math.round(t.pct)}%</text>
+      </svg>
+      <div style="min-width:0">
+        <div class="t1">${t.name}</div>
+        <div class="t2">${fmt(t.spent)} / ${fmtLimit(t.limit)}</div>
+      </div>
+    </div>`).join("")
+    + (C.funded > 0 ? `<div class="potline">≈ ${fmt(C.funded - C.potSpent)} left in pot · tracked Apple Pay taps only</div>` : "");
+}
+
+function renderIOU(){
+  const open = D.loans || [];
+  $("#ioublock").hidden = !open.length;
+  if (!open.length) return;
+  $("#iou-agg").textContent = fmt(open.reduce((s,l) => s + Number(l.amount), 0)) + " out";
+  $("#iou-rows").innerHTML = open.map(l => `
+    <div class="iourow">
+      <span class="who">${escH(l.person)}</span>
+      <span class="when">${new Date(l.lent_date + "T00:00:00")
+        .toLocaleDateString("en-SG",{day:"numeric",month:"short"})}${l.channel ? " · " + escH(l.channel) : ""}</span>
+      <span class="amt">${fmt(Number(l.amount))}</span>
+      <button class="paidbtn" data-loan="${escH(String(l.id))}">Paid back</button>
+    </div>`).join("");
+}
+
+/* Derived subscriptions — deterministic, grouped by CATEGORY. Two live
+   incidents shaped this (both 2026-08-01). First, rhythm ≠ billing: a
+   loose net matched insurance premiums, Atome instalments, and a $7
+   teh tarik habit — so the net demands billing behaviour: exactly ONE
+   charge per month over ≥2 distinct months, same day of month (≤4d
+   spread — a 29th–31st billing date clamping to Feb 28 still fits),
+   every charge ≥ $0.50, consecutive amounts stepping ≤ max(10%, $0.05)
+   (a 5–10% step still reads as a price change). Second, merchants are
+   the WRONG key: Spotify's bank string carries a fresh payment ref
+   every month ("Spotify P424C25C39" → "P435EF3A4E" → …), so merchant
+   grouping fragments every real sub below the 2-month floor — while
+   MerchantMap has already solved identity by filing them into stable
+   categories. Grouping by category finds the real subs AND auto-kills
+   the old false positives: both Prudential policies share one category
+   (2 charges/month → rejected), TARIK lives in the many-charge food
+   category, Atome instalments fragment across three categories.
+   Thresholds and grouping mirror detect_subscription_creep
+   (tools/supabase_client.py) — change both together. The ✕ dismissal
+   (sub_overrides, migration 0006 — keys are now normalized CATEGORY
+   names) stays for what detection can't know, e.g. a single-policy
+   insurance category that bills like clockwork. Monthly cadence only;
+   annual subs are out of scope until the window carries a year. */
+function calcSubs(){
+  const byM = {};
+  for (const t of D.txns){
+    if (t.category.trim().toUpperCase() === PENDING) continue;
+    if ((t.source||"").toLowerCase() === "backfill") continue;
+    if (TRANSFER_CATS.has(t.category.toLowerCase())) continue;
+    if (LENDING_CATS.has(t.category.toLowerCase())) continue;
+    if (isYtSpend(t) || Number(t.amount) <= 0) continue;
+    const k = t.category.trim().toUpperCase();
+    (byM[k] = byM[k] || []).push(t);
+  }
+  const subs = [], cm = curMonthKey();
+  for (const k in byM){
+    if (D.subExcl.has(k)) continue;      // dismissed by Hadi — for good
+    const list = byM[k], months = {};
+    for (const t of list)
+      (months[t.date.slice(0,7)] = months[t.date.slice(0,7)] || []).push(t);
+    const mkeys = Object.keys(months).sort();
+    if (mkeys.length < 2) continue;
+    if (mkeys.some(m => months[m].length !== 1)) continue;
+    const doms = list.map(t => parseInt(t.date.slice(8,10), 10));
+    if (Math.max(...doms) - Math.min(...doms) > 4) continue;
+    const seq = mkeys.map(m => Number(months[m][0].amount));
+    let billing = seq.every(v => v >= 0.5);
+    for (let i = 1; i < seq.length && billing; i++)
+      if (Math.abs(seq[i] - seq[i-1]) > Math.max(seq[i-1] * 0.10, 0.05)) billing = false;
+    if (!billing) continue;
+    const lastM = mkeys[mkeys.length-1];
+    const lastAmt = seq[seq.length-1];
+    const prevAvg = seq.slice(0,-1).reduce((s,v) => s + v, 0) / (seq.length - 1);
+    const latest = list.reduce((a,b) => a.date >= b.date ? a : b);
+    subs.push({ key: k, name: latest.category.trim(),
+      amt: lastAmt, lastDate: latest.date,
+      priceChange: prevAvg > 0 && Math.abs(lastAmt - prevAvg) / prevAvg > 0.05,
+      up: lastAmt > prevAvg,
+      missing: lastM !== cm });
+  }
+  return subs.sort((a,b) => b.amt - a.amt);
+}
+
+// muted brand-ish chip colour: a stable hash of the merchant key picks a
+// hue; lightness/chroma stay in Muted Card System territory. Chips keep
+// their colour in dark mode, like the card liveries do.
+const subHue = s => { let h = 0; for (const c of s) h = (h*31 + c.charCodeAt(0)) % 360; return h; };
+// monogram from letters, never digits — "Prudential 72279942" is "PR",
+// not "P7"; single-word names take their first two letters
+const subMono = name => {
+  const words = name.split(/\s+/).filter(w => /^[a-z]/i.test(w));
+  const m = words.length >= 2 ? words[0][0] + words[1][0]
+    : ((words[0] || name).replace(/[^a-z]/gi, "").slice(0, 2) || name.slice(0, 2));
+  return m.toUpperCase();
+};
+
+function renderSubs(){
+  const subs = calcSubs();
+  // declared subs: registry rows (verdict 'include') for charges no
+  // email can see — Anthropic/ChatGPT/Obsidian bill via Stripe Link,
+  // M365 and Google One via their own gateways, and the banks' alert
+  // streams skip those merchant-initiated charges at ANY threshold. The
+  // amount is the month's budget limit (the registry's cross-check);
+  // the display name comes from the budget row when one exists.
+  const shownKeys = new Set(subs.map(s => s.key));
+  const budByKey = {};
+  for (const b of D.budgets){
+    const k = b.category.trim().toUpperCase();
+    budByKey[k] = { name: b.category.trim(), limit: Number(b.limit_amount) };
+  }
+  for (const k of D.subIncl){
+    if (shownKeys.has(k) || D.subExcl.has(k)) continue;
+    subs.push({ key: k, name: budByKey[k] ? budByKey[k].name : k,
+      amt: budByKey[k] ? budByKey[k].limit : 0, lastDate: null,
+      declared: true, priceChange: false, up: false, missing: false });
+  }
+  subs.sort((a,b) => b.amt - a.amt);
+  $("#subsblock").hidden = !subs.length;
+  const dockBtn = document.querySelector('#dock button[data-go="subsblock"]');
+  if (dockBtn) dockBtn.hidden = !subs.length;
+  if (!subs.length) return;
+  $("#subs-agg").textContent = "≈ " + fmt0(subs.reduce((s,x) => s + x.amt, 0)) + "/mo";
+  $("#subsadd").hidden = false;
+  $("#subspick").hidden = true;
+  $("#subs-rows").innerHTML = subs.map(s => {
+    const h = subHue(s.key);
+    const note = s.declared ? "declared · no email alerts"
+      : s.missing ? "not charged yet this month"
+      : "last " + new Date(s.lastDate + "T00:00:00").toLocaleDateString("en-SG",{day:"numeric",month:"short"});
+    return `<div class="subrow${s.missing ? " dim" : ""}">
+      <span class="subchip" style="background:oklch(0.92 0.05 ${h});color:oklch(0.42 0.08 ${h})">${escH(subMono(s.name))}</span>
+      <span class="subname">${escH(s.name)}<span class="subnote">${note}${s.priceChange ? ` · <b class="pc">price ${s.up ? "↑" : "↓"}</b>` : ""}</span></span>
+      <span class="subamt">${fmt(s.amt)}</span>
+      <button class="subx" data-key="${escH(s.key)}" title="${s.declared ? "undeclare — hide it" : "not a subscription — hide it for good"}">✕</button>
+    </div>`;
+  }).join("");
+}
+
+function renderCards(C){
+  $("#card-rows").innerHTML = C.cards.map(c => {
+    const sel = state.filter && state.filter.card === c.card_id;
+    const min = Number(c.min_spend_bonus || 0);
+    const cap = Number(c.bonus_cap || 0);
+    let meter = "", note = "no target set";
+    if (min > 0){
+      // Min-spend gates are CALENDAR-month for the live lineup (yuu's
+      // S$800 counts by transaction date, not statement cycle — the
+      // agent-side nudge already uses _calendar_month_spend). The big
+      // number above stays statement-cycle; the meters are reward math.
+      // If UOB One's statement-month min ever gets configured, that card
+      // needs a per-card period flag — deliberately not built until then.
+      const pct = c.spentCal/min*100;
+      meter += `<div class="meter" style="background:var(--mc-bar-track)"><i data-fill
+        style="width:${Math.min(pct,100)}%;background:var(--mc-bar-fill)"></i></div>`;
+      note = pct >= 100 ? `min ${fmt0(min)} met ✓`
+           : `min ${fmt0(min)} · ${fmt(min-c.spentCal)} to go`;
+    }
+    if (cap > 0 && c.card_id === "uob-pref"){
+      // Preferred runs TWO S$600 calendar-month pools (contactless /
+      // online) — split by merchant class, same rules as the agent side.
+      // Layout per Hadi: meter, its caption, meter, its caption.
+      const onl = c.spentCalOnline || 0;
+      const tap = Math.max(0, c.spentCal - onl);
+      // no inline margin when this is the stack's FIRST meter — the
+      // .mdiv + .meter rule (4px) then applies uniformly on every tile
+      meter += `<div class="meter" style="background:var(--mc-bar-track)${min>0?";margin-top:4px":""}"><i data-fill
+        style="width:${Math.min(tap/cap*100,100)}%;background:var(--mc-bar-fill)"></i></div>`;
+      meter += `<div class="pnote">tap ${fmt0(tap)} / ${fmt0(cap)} (${Math.round(tap/cap*100)}%)</div>`;
+      meter += `<div class="meter" style="background:var(--mc-bar-track);margin-top:6px"><i data-fill
+        style="width:${Math.min(onl/cap*100,100)}%;background:var(--mc-bar-fill)"></i></div>`;
+      meter += `<div class="pnote">online ${fmt0(onl)} / ${fmt0(cap)} (${Math.round(onl/cap*100)}%)</div>`;
+      note = min > 0 ? note : "";
+    } else if (c.card_id === "dbs-yuu"){
+      // yuu's 18% tier runs on the CALENDAR month: S$800 total spend
+      // (the min meter above) + ≥4 distinct partner merchants, and the
+      // bonus points cap at 28,800 ≈ S$823 of PARTNER spend. Second
+      // meter = partner-only spend against that cap, in uob-pref's
+      // meter/caption/meter/caption rhythm (the min note becomes the
+      // first meter's caption so each bar sits over its own line).
+      if (min > 0){ meter += `<div class="pnote">${note}</div>`; note = ""; }
+      const ps = c.spentCalPartner || 0;
+      meter += `<div class="meter" style="background:var(--mc-bar-track)${min>0?";margin-top:6px":""}"><i data-fill
+        style="width:${Math.min(ps/YUU_PARTNER_CAP*100,100)}%;background:var(--mc-bar-fill)"></i></div>`;
+      // Longest caption any tile carries: at .pnote's 10px the worst
+      // case ("partners $823/$823 · 4/4 merchants") clips at the tile
+      // edge on a 402px viewport — 9px + hairline tracking fits it
+      meter += `<div class="pnote" style="font-size:9px;letter-spacing:-.015em">partners ${fmt0(ps)}/${fmt0(YUU_PARTNER_CAP)} · ${c.partnersCal||0}/4 merchants</div>`;
+    } else if (cap > 0){
+      // cap meter tracks the CALENDAR month (how the banks count it) while
+      // the big number is statement-cycle spend — print the calendar figure
+      const pct = c.spentCal/cap*100;
+      meter += `<div class="meter" style="background:var(--mc-bar-track)${min>0?";margin-top:4px":""}"><i data-fill
+        style="width:${Math.min(pct,100)}%;background:var(--mc-bar-fill)"></i></div>`;
+      // "cal. month" dropped from the caption — the REWARDS · CAL MONTH
+      // zone label above the meters says it once for the whole stack.
+      const capNote = pct >= 100
+        ? `bonus cap ${fmt0(cap)} hit (${fmt(c.spentCal)}) — base rate now`
+        : `bonus cap ${fmt0(cap)} · ${fmt(c.spentCal)} (${Math.round(pct)}%)`;
+      note = min > 0 ? note + "<br>" + capNote : capNote;
+    }
+    const last4 = (c.payment_method_pattern.match(/(\d{4})\D*$/) || [,""])[1];
+    /* .mc-card + the two decorative layers come from the library; everything
+       inside __body is ours. The layers must stay aria-hidden and must stay
+       before the body — the body is the only layer painted above the wash. */
+    return `<div class="card mc-card ${sel?"sel":""}" role="button" tabindex="0"
+      aria-label="filter tape by ${c.display_name}" data-card="${c.card_id}"
+      data-name="${c.display_name}" style="${liveryVars(c)}">
+      <div class="mc-card__crest" aria-hidden="true"></div>
+      <div class="mc-card__wash" aria-hidden="true"></div>
+      <div class="mc-card__body">
+        <div class="top"><span class="cn">${c.display_name}</span><span class="num">${last4}</span></div>
+        <div class="cv">${fmt(c.spent)}</div>
+        <div class="cyc">${shortDate(c.start)} – ${shortDate(c.end)}</div>
+        ${meter ? `<div class="mdiv">rewards · cal month</div>` : ""}${meter}
+        ${note ? `<div class="note">${note}</div>` : ""}
+      </div>
+    </div>`;
+  }).join("") || `<div style="grid-column:1/-1;padding:8px 4px;font-size:13px;color:var(--ter)">no cards configured</div>`;
+}
+
+const DAY_MS = 86400000;
+function dayLabel(iso){
+  const today = isoDate(new Date());
+  const d = new Date(iso + "T00:00:00");
+  const wd = d.toLocaleDateString("en-SG",{weekday:"short"}).toUpperCase();
+  const dm = d.toLocaleDateString("en-SG",{day:"numeric",month:"short"}).toUpperCase();
+  return wd + " " + dm + (iso === today ? " · TODAY" : "");
+}
+
+function tapeData(C){
+  const f = state.filter;
+  const cutoff = isoDate(new Date(Date.now() - 14*DAY_MS));
+  const cards = new Map(D.cards.map(c => [c.card_id, (c.payment_method_pattern||"").toLowerCase().trim()]));
+  const budgetCats = new Set([...C.budgets, ...C.unbudgeted].map(b => b.cat));
+  const inWindow = C.tapeTxns.filter(t => {
+    // 14-day window for the current month — except a date filter, which
+    // must reach any day of the month the chart can select
+    if (C.isCur && state.tapeRange !== "month" && t.date < cutoff && !(f && f.date)) return false;
+    if (!f) return true;
+    if (f.date) return t.date === f.date;
+    if (f.cat) return t.category === f.cat;
+    const pat = cards.get(f.card);
+    return pat && t.payment_method.toLowerCase().includes(pat);
+  });
+  // Landing view: TODAY only. A day with no spending says so honestly
+  // (emptyToday) instead of silently showing the most recent active day
+  // labelled "today" — that fallback made 28 Jul read as today's spending
+  // on a quiet 29 Jul. A filter, "14 days", or a non-current month shows
+  // the full window.
+  // Range toggle: today | 14 days | month. It applies with card/category
+  // filters too (a cash tile shows the calendar month, so its filtered
+  // Activity must be able to match — the old any-filter-forces-14-days
+  // rule made the tile total and the list disagree). A DATE selection or
+  // an archived month overrides the toggle entirely.
+  const forced = (f && !!f.date) || !C.isCur;
+  const expanded = forced || state.tapeRange !== "today";
+  let shown = inWindow, emptyToday = false;
+  if (!expanded){
+    const today = isoDate(new Date());
+    shown = inWindow.filter(t => t.date === today);
+    emptyToday = !shown.length;
+  }
+  const groups = [];
+  // The total counts EVERY listed row — transfers included (Hadi,
+  // 2026-07-31: "isn't a transfer cash out & spend?" — yes; top-ups are
+  // budgeted spend and the chart already counted them, so excluding
+  // them here was the inconsistency). With pending also counted in the
+  // chart/hero now, every surface shows the same number for the same
+  // window; the footer's pendingSum is an attribution note, not a
+  // discrepancy explainer. Transfer rows keep their → styling.
+  // YouTrip pot spends are LISTED (they happened) but not SUMMED — the
+  // hero/chart already counted their money at top-up, and the tape total
+  // must show the same number as every other surface. A footer line
+  // attributes them, like pendingSum does for uncategorized.
+  let sum = 0, pendingSum = 0, ytSum = 0;
+  for (const t of shown){
+    let g = groups[groups.length-1];
+    if (!g || g.key !== t.date){ g = {key:t.date, label:dayLabel(t.date), sum:0, rows:[]}; groups.push(g); }
+    const transfer = TRANSFER_CATS.has(t.category.toLowerCase());
+    const ytspend = isYtSpend(t);
+    if (ytspend) ytSum += Number(t.amount);
+    else { g.sum += Number(t.amount); sum += Number(t.amount); }
+    const pending = t.category.trim().toUpperCase() === PENDING;
+    if (pending) pendingSum += Number(t.amount);
+    g.rows.push({...t, transfer, pending, ytspend,
+      jump: !transfer && !pending && !ytspend && budgetCats.has(t.category),
+      chip: ytspend ? "✈ pot" : transfer ? "transfer" : pending ? "pending" : t.category.replace("Personal - ","")});
+  }
+  return { groups, sum, shown, inWindow, expanded, emptyToday, pendingSum, ytSum };
+}
+
+/* No-spend day copy — Kevin's voice: blunt, no cheerleading. Rotates by
+   day of month so it doesn't feel canned two quiet days in a row. */
+const NOSPEND_WIT = [
+  "Your cards are cooling off nicely.",
+  "The wallet stays shut. Respect.",
+  "Kevin has nothing to judge yet.",
+  "Not a cent. Suspiciously disciplined.",
+  "The banks miss you already.",
+  "Zero. As budgeted, presumably.",
+];
+const noSpendLine = () =>
+  "No spending today — " + NOSPEND_WIT[new Date().getDate() % NOSPEND_WIT.length];
+
+function renderTape(C){
+  const { groups, sum, shown, inWindow, expanded, emptyToday,
+          pendingSum, ytSum } = tapeData(C);
+  const f = state.filter;
+  const receipt = state.tapeMode === "receipt";
+  $("#tapelist").hidden = receipt;
+  $("#tapereceipt").hidden = !receipt;
+  $("#tapemode").textContent = receipt ? "VIEW AS LIST" : "VIEW AS RECEIPT";
+  // The toggle stays visible for card/category filters; only a date
+  // selection (or an archived month) hides it — those force their own range.
+  $("#rangeseg").hidden = (f && !!f.date) || !C.isCur;
+  $("#range-today").classList.toggle("on", state.tapeRange === "today");
+  $("#range-all").classList.toggle("on", state.tapeRange === "all");
+  $("#range-month").classList.toggle("on", state.tapeRange === "month");
+
+  const rangeText = f && f.date ? state.label
+    : !C.isCur ? C.monthName
+    : state.tapeRange === "month" ? C.monthName
+    : state.tapeRange === "all" ? "14 days" : "today";
+  const itemsWord = `${shown.length} item${shown.length === 1 ? "" : "s"}`;
+  // Dropdown options for pending rows: existing categories only — the
+  // same guard the agent's write tools enforce. Built once per render.
+  const catOpts = [...new Set([...C.budgets, ...C.unbudgeted].map(b => b.cat))]
+    .filter(c => c && !TRANSFER_CATS.has(c.toLowerCase()) && !LENDING_CATS.has(c.toLowerCase()))
+    .sort((a,b) => a.localeCompare(b));
+  const pickerOpts = `<option value="" selected disabled>pending…</option>`
+    + catOpts.map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join("");
+  if (!receipt){
+    $("#filtbox").hidden = !f;
+    if (f) $("#filtname").textContent = state.label;
+    $("#tape-rows").innerHTML = groups.length ? groups.map(g => `
+      <div class="dayrow"><span class="dl">${g.label}</span><span class="dt">${fmt(g.sum)}</span></div>
+      ${g.rows.map(x => {
+        const tip = `${(x.txn_time||"").slice(0,5)} · ${x.payment_method}`;
+        return `<div class="trow" title="${tip.replace(/"/g,"&quot;")}">
+          <span class="m">${x.merchant}</span>
+          ${x.pending && sb ? `<select class="catpick" data-txn="${escH(x.txn_id||"")}"
+            aria-label="set category for ${escH(x.merchant)}">${pickerOpts}</select>`
+          : `<button class="catbtn ${x.jump?"":"mut"}" ${x.jump?`data-jump="${x.category}"`:""}>${x.chip}</button>`}
+          <span class="a ${x.transfer||x.ytspend?"mut":""}">${x.transfer?"→ ":""}${fmt(Number(x.amount))}</span>
+        </div>`;
+      }).join("")}`).join("")
+      : `<div class="tempty">${emptyToday ? noSpendLine() : "Nothing for this filter."}</div>`;
+    $("#titems").textContent = `${itemsWord} · ${rangeText}`;
+    $("#ttotal").textContent = fmt(sum);
+    // Attribution notes: uncategorized share, and pot spends not counted.
+    const recNotes = [];
+    if (pendingSum > 0) recNotes.push(`of which ${fmt(pendingSum)} uncategorized`);
+    if (ytSum > 0) recNotes.push(`+ ${fmt(ytSum)} from the YouTrip pot (not counted)`);
+    $("#trec").hidden = !recNotes.length;
+    $("#trec").textContent = recNotes.join(" · ");
+  } else {
+    $("#paperbody").innerHTML = `
+      <div class="h1">THE TAPE</div>
+      <div class="h2">KEVIN · ${(C.ytd ? "THIS MONTH" : C.monthName.toUpperCase() + " " + C.yearLabel)}${IS_FILE ? " · SAMPLE" : ""}</div>
+      <div class="h3">TAP A CATEGORY TO JUMP TO ITS BUDGET</div>
+      ${f ? `<div class="rfilt"><span>FILTERED: <b>${state.label.toUpperCase()}</b></span>
+        <button id="rfiltclear">✕ CLEAR</button></div>` : ""}
+      <div class="rule"></div>
+      ${groups.length ? groups.map(g => `
+        <div class="rday"><span>${g.label}</span><span>${fmt(g.sum)}</span></div>
+        ${g.rows.map(x => `<div class="rrow">
+          <span class="m">${x.merchant}</span>
+          <button class="${x.jump?"":"mut"}" ${x.jump?`data-jump="${x.category}"`:""}>${x.chip}</button>
+          <span class="a ${x.transfer||x.ytspend?"mut":""}">${x.transfer?"→ ":""}${fmt(Number(x.amount))}</span>
+        </div>`).join("")}`).join("")
+        : `<div class="rempty">${emptyToday ? "— " + noSpendLine().toUpperCase() + " —" : "— NOTHING FOR THAT FILTER —"}</div>`}
+      ${!f && C.isCur ? `<button class="rrange" id="rrange">${
+        state.tapeRange === "today" ? `SHOW 14 DAYS · ${inWindow.length} ITEMS ▾`
+        : state.tapeRange === "all" ? "SHOW FULL MONTH ▾"
+        : "SHOW TODAY ONLY ▴"}</button>` : ""}
+      <div class="rule"></div>
+      <div class="sumrow"><span class="lbl">ITEMS</span><span class="lead"></span><span class="val">${shown.length} · ${rangeText.toUpperCase()}</span></div>
+      ${pendingSum > 0 ? `<div class="sumrow"><span class="lbl">OF WHICH UNCATEGORIZED</span><span class="lead"></span><span class="val">${fmt(pendingSum)}</span></div>` : ""}
+      <div class="sumrow total"><span class="lbl">TOTAL</span><span class="lead"></span><span class="val">${fmt(sum)}</span></div>`;
+    const rc = document.getElementById("rfiltclear");
+    if (rc) rc.addEventListener("click", clearFilter);
+    const rr = document.getElementById("rrange");
+    if (rr) rr.addEventListener("click", () => {
+      state.tapeRange = state.tapeRange === "today" ? "all"
+        : state.tapeRange === "all" ? "month" : "today";
+      renderTape(calc());
+    });
+  }
+}
+
+function updateNav(){
+  const cur = curMonthKey();
+  const v = state.view;
+  $("#mlabel").textContent = v.mode === "ytd" ? cur.slice(0,4) + " · year to date"
+    : new Date(+v.month.slice(0,4), +v.month.slice(5,7)-1, 1)
+        .toLocaleDateString("en-SG",{month:"long", year:"numeric"});
+  $("#mprev").disabled = v.mode === "ytd";
+  $("#mnext").disabled = v.mode === "ytd" || v.month >= cur;
+  $("#mytd").classList.toggle("on", v.mode === "ytd");
+}
+
+function monthShift(month, d){
+  const [y,m] = month.split("-").map(Number);
+  const t = m + d, ny = y + Math.floor((t-1)/12), nm = ((t-1)%12+12)%12 + 1;
+  return ny + "-" + String(nm).padStart(2,"0");
+}
+
+async function refreshView(){
+  updateNav();
+  try { CURVD = await resolveView(); }
+  catch (e){ $("#f-sync").textContent = "view failed: " + e.message; return; }
+  renderAll();
+}
+
+$("#mprev").addEventListener("click", () => {
+  state.view = { mode:"month", month: monthShift(state.view.month, -1) };
+  state.filter = null; state.label = ""; state.tapeRange = "today"; state.scrub = null;
+  refreshView();
+});
+$("#mnext").addEventListener("click", () => {
+  state.view = { mode:"month", month: monthShift(state.view.month, 1) };
+  state.filter = null; state.label = ""; state.tapeRange = "today"; state.scrub = null;
+  refreshView();
+});
+$("#mytd").addEventListener("click", () => {
+  const cur = curMonthKey();
+  state.view = state.view.mode === "ytd"
+    ? { mode:"month", month: cur } : { mode:"ytd", month: cur };
+  state.filter = null; state.label = ""; state.tapeRange = "today"; state.scrub = null;
+  refreshView();
+});
+
+function renderAll(){
+  const C = calc();
+  renderPulse(C); renderInsight(C); renderBudgets(C); renderTrip(C);
+  renderIOU(); renderSubs();
+  renderCards(C); renderTape(C);
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches){
+    requestAnimationFrame(() => {
+      document.querySelectorAll("[data-fill]").forEach((el,i) => {
+        const w = el.style.width;
+        if (w) el.animate([{width:"0%"},{width:w}], {duration:560, delay:30*i, easing:"cubic-bezier(.25,.9,.3,1)"});
+      });
+    });
+  }
+}
+
+/* ————— interactions ————— */
+function smoothTo(el, off){
+  window.scrollTo({top: el.getBoundingClientRect().top + window.scrollY - (off||10), behavior:"smooth"});
+}
+function toggleFilter(f, label){
+  const cur = state.filter;
+  const same = cur && ((f.cat && cur.cat === f.cat) || (f.card && cur.card === f.card));
+  state.filter = same ? null : f;
+  state.label = same ? "" : label;
+  state.scrub = null;
+  // Applying a filter lands on the familiar 14-day view (the pre-toggle
+  // default); the user widens to Month or narrows to Today from there.
+  if (!same) state.tapeRange = "all";
+  const C = calc();
+  renderPulse(C); renderBudgets(C); renderCards(C); renderTape(C);
+  if (!same) setTimeout(() => smoothTo($("#tape"), 14), 60);
+}
+function clearFilter(){
+  state.filter = null; state.label = ""; state.scrub = null;
+  const C = calc(); renderPulse(C); renderBudgets(C); renderCards(C); renderTape(C);
+}
+let flashT;
+function jumpToCat(cat){
+  state.budgetsOpen = true; state.flashCat = cat;
+  renderBudgets(calc());
+  setTimeout(() => { const el = document.getElementById(slug(cat)); if (el) smoothTo(el, 76); }, 90);
+  clearTimeout(flashT);
+  flashT = setTimeout(() => { state.flashCat = null; renderBudgets(calc()); }, 1800);
+}
+document.addEventListener("click", e => {
+  const jump = e.target.closest("[data-jump]");
+  if (jump){ jumpToCat(jump.dataset.jump); return; }
+  const brow = e.target.closest(".brow[data-cat]");
+  if (brow){ toggleFilter({cat: brow.dataset.cat}, brow.dataset.cat); return; }
+  const card = e.target.closest(".card[data-card]");
+  if (card){ toggleFilter({card: card.dataset.card}, card.dataset.name); return; }
+});
+$("#filtclear").addEventListener("click", clearFilter);
+$("#btoggle").addEventListener("click", () => {
+  const collapsing = state.budgetsOpen;
+  state.budgetsOpen = !state.budgetsOpen; renderBudgets(calc());
+  if (collapsing) smoothTo($("#budgets"), 10);
+});
+$("#range-today").addEventListener("click", () => { state.tapeRange = "today"; renderTape(calc()); });
+$("#range-all").addEventListener("click", () => { state.tapeRange = "all"; renderTape(calc()); });
+$("#range-month").addEventListener("click", () => { state.tapeRange = "month"; renderTape(calc()); });
+
+/* Quick-categorize: a pending row's dropdown writes ONLY the category
+   (existing Budget names — creation, splits, merchant renames and
+   MerchantMap learning stay conversational with Kevin; learning in
+   particular fires only on user CORRECTIONS, and a first categorisation
+   is not a correction). Optimistic-free: write first, then refresh the
+   view; RLS without the 0004 update policy "succeeds" touching 0 rows —
+   detected and reported, same pattern as budget.html. */
+$("#tape-rows").addEventListener("change", async e => {
+  const sel = e.target.closest("select.catpick");
+  if (!sel || !sb) return;
+  const txn = sel.dataset.txn, cat = sel.value;
+  if (!txn || !cat) return;
+  sel.disabled = true;
+  const { data, error } = await sb.from("transactions")
+    .update({ category: cat }).eq("txn_id", txn).select("txn_id");
+  if (error || !data || !data.length){
+    sel.disabled = false; sel.value = "";
+    $("#trec").hidden = false;
+    $("#trec").textContent = error ? `update failed: ${error.message}`
+      : "update touched 0 rows — run supabase/migrations/0004_transactions_update_policy.sql";
+    return;
+  }
+  const row = D.txns.find(t => t.txn_id === txn);
+  if (row) row.category = cat;
+  Object.keys(VIEWCACHE).forEach(k => delete VIEWCACHE[k]);
+  CURVD = await resolveView();
+  const C2 = calc();
+  renderPulse(C2); renderBudgets(C2); renderCards(C2); renderTape(C2); renderInsight(C2);
+});
+$("#tapemode").addEventListener("click", () => {
+  state.tapeMode = state.tapeMode === "receipt" ? "clean" : "receipt";
+  localStorage.setItem("kv-tape", state.tapeMode);
+  renderTape(calc());
+});
+
+/* IOU "paid back": flips the loan's status via the signed-in session
+   (migration 0005's owner update policy — RLS without it "succeeds"
+   touching 0 rows, detected and reported like quick-categorize). The
+   ledger OFFSET txn is deliberately NOT written here: money writes stay
+   conversational — telling Kevin "X paid me back" does both. */
+$("#iou-rows").addEventListener("click", async e => {
+  const btn = e.target.closest(".paidbtn");
+  if (!btn || !sb) return;
+  const id = btn.dataset.loan;
+  btn.disabled = true; btn.textContent = "…";
+  const { data, error } = await sb.from("loans")
+    .update({ status: "repaid", repaid_date: isoDate(new Date()) })
+    .eq("id", id).select("id");
+  if (error || !data || !data.length){
+    btn.disabled = false; btn.textContent = "Paid back";
+    $("#iou-agg").textContent = error ? `update failed: ${error.message}`
+      : "update touched 0 rows — run supabase/migrations/0005_loans.sql";
+    return;
+  }
+  D.loans = D.loans.filter(l => String(l.id) !== String(id));
+  renderIOU();
+});
+
+/* Subscription dismissal: a durable human verdict for what detection
+   can't know — Atome instalments END, insurance files under insurance.
+   Upserts into sub_overrides (migration 0006); a failure names it. */
+$("#subs-rows").addEventListener("click", async e => {
+  const btn = e.target.closest(".subx");
+  if (!btn || !sb) return;
+  btn.disabled = true;
+  const { error } = await sb.from("sub_overrides")
+    .upsert({ merchant_key: btn.dataset.key, verdict: "exclude" });
+  if (error){
+    btn.disabled = false;
+    $("#subs-agg").textContent =
+      `dismiss failed — run supabase/migrations/0006_sub_overrides.sql (${error.message})`;
+    return;
+  }
+  D.subExcl.add(btn.dataset.key);
+  D.subIncl.delete(btn.dataset.key);
+  renderSubs();
+});
+
+/* Declare a subscription the alerts can't see: pick an existing budget
+   category → an 'include' verdict in sub_overrides. Amount stays
+   cross-checked against the budget row; ✕ undeclares. */
+$("#subsadd").addEventListener("click", () => {
+  const taken = new Set([...D.subIncl]);
+  const opts = D.budgets.map(b => b.category.trim())
+    .filter(c => c && !TRANSFER_CATS.has(c.toLowerCase()) && !LENDING_CATS.has(c.toLowerCase()))
+    .filter(c => !taken.has(c.toUpperCase()))
+    .sort((a,b) => a.localeCompare(b));
+  $("#subspick").innerHTML = `<option value="" selected disabled>which category?</option>`
+    + opts.map(c => `<option value="${escH(c)}">${escH(c)}</option>`).join("");
+  $("#subsadd").hidden = true;
+  $("#subspick").hidden = false;
+});
+$("#subspick").addEventListener("change", async e => {
+  const cat = e.target.value;
+  if (!cat || !sb) return;
+  e.target.disabled = true;
+  const key = cat.trim().toUpperCase();
+  const { error } = await sb.from("sub_overrides")
+    .upsert({ merchant_key: key, verdict: "include" });
+  e.target.disabled = false;
+  if (error){
+    $("#subs-agg").textContent =
+      `declare failed — run supabase/migrations/0006_sub_overrides.sql (${error.message})`;
+    return;
+  }
+  D.subIncl.add(key);
+  D.subExcl.delete(key);
+  renderSubs();
+});
+
+/* ————— chart scrubbing: drag previews a day, release selects it ————— */
+const psvg = $("#pacesvg");
+let scrubbing = false, scrubRaf = null;
+function scrubIndexFromEvent(e){
+  if (!PCHART || !PCHART.len) return null;
+  const r = psvg.getBoundingClientRect();
+  const xf = (e.clientX - r.left) / r.width * PCHART.W;
+  const i = Math.round((xf - PCHART.padX) / (PCHART.X1 - PCHART.padX) * (PCHART.N - 1)) + 1;
+  return Math.min(Math.max(i, 1), PCHART.len);
+}
+function commitScrub(){
+  const i = state.scrub;
+  if (!i) return;
+  const C = calc();
+  if (C.ytd){
+    // selecting a month in YTD opens that month
+    state.scrub = null;
+    state.view = { mode:"month", month: C.curMonth.slice(0,4) + "-" + String(C.ytdStart + i - 1).padStart(2,"0") };
+    state.filter = null; state.label = ""; state.tapeRange = "today"; state.scrub = null;
+    refreshView();
+    return;
+  }
+  const dateStr = C.viewMonth + "-" + String(i).padStart(2,"0");
+  if (state.filter && state.filter.date === dateStr){
+    state.filter = null; state.label = ""; state.scrub = null;   // tap again = clear
+  } else {
+    state.filter = { date: dateStr };
+    state.label = new Date(dateStr + "T00:00:00")
+      .toLocaleDateString("en-SG",{day:"numeric",month:"short"});
+  }
+  const C2 = calc();
+  renderPulse(C2); renderBudgets(C2); renderCards(C2); renderTape(C2);
+}
+psvg.addEventListener("pointerdown", e => {
+  if (!PCHART) return;
+  psvg.setPointerCapture(e.pointerId);
+  scrubbing = true;
+  state.scrub = scrubIndexFromEvent(e);
+  renderPulse(calc());
+});
+psvg.addEventListener("pointermove", e => {
+  if (!scrubbing || scrubRaf) return;
+  scrubRaf = requestAnimationFrame(() => {
+    scrubRaf = null;
+    const i = scrubIndexFromEvent(e);
+    if (i && i !== state.scrub){ state.scrub = i; renderPulse(calc()); }
+  });
+});
+psvg.addEventListener("pointerup", () => {
+  if (!scrubbing) return;
+  scrubbing = false;
+  commitScrub();
+});
+psvg.addEventListener("pointercancel", () => { scrubbing = false; });
+// crossing the desktop breakpoint (or rotating) changes the chart width
+let rsRaf = null;
+window.addEventListener("resize", () => {
+  if (rsRaf) return;
+  rsRaf = requestAnimationFrame(() => {
+    rsRaf = null;
+    if (!$("#app").hidden) renderPulse(calc());
+  });
+});
+
+document.querySelectorAll("#dock button").forEach(b =>
+  b.addEventListener("click", () => {
+    const el = document.getElementById(b.dataset.go);
+    if (b.dataset.go === "pulse") window.scrollTo({top:0, behavior:"smooth"});
+    else if (el) smoothTo(el, 10);
+  }));
+let spyRaf = null;
+window.addEventListener("scroll", () => {
+  if (spyRaf) return;
+  spyRaf = requestAnimationFrame(() => {
+    spyRaf = null;
+    let cur = "pulse";
+    for (const id of ["pulse","budgets","cards","subsblock","tape"]){
+      const el = document.getElementById(id);
+      if (el && el.getBoundingClientRect().top < innerHeight * 0.38) cur = id;
+    }
+    document.querySelectorAll("#dock button").forEach(b =>
+      b.classList.toggle("on", b.dataset.go === cur));
+  });
+}, {passive:true});
+
+/* ————— data loading ————— */
+async function loadData(){
+  // ~100 days: subscriptions detection needs 3 distinct months, and the
+  // trip pot sums top-ups that can precede a trip by weeks (was 60)
+  const since = isoDate(new Date(Date.now() - 100*DAY_MS));
+  const [tx, bg, cd, tr] = await Promise.all([
+    sb.from("transactions").select("date,txn_time,merchant,amount,category,source,payment_method,notes,txn_id")
+      .gte("date", since).order("date",{ascending:false}).order("id",{ascending:false}).limit(1500),
+    sb.from("budgets").select("category,month,limit_amount")
+      .eq("month", curMonthKey()),
+    sb.from("cards").select("*").order("card_id"),
+    sb.from("travel_mode").select("*"),
+  ]);
+  for (const r of [tx,bg,cd,tr]) if (r.error) throw new Error(r.error.message);
+  D.txns = tx.data; D.budgets = bg.data; D.cards = [...cd.data, CASH_CARD]; D.trips = tr.data;
+  // Kevin's nightly narrative insight — garnish, so failures never block a sync
+  try {
+    const ins = await sb.from("insights").select("date,insight")
+      .order("date",{ascending:false}).order("id",{ascending:false}).limit(1);
+    D.insight = (!ins.error && ins.data.length) ? ins.data[0] : null;
+  } catch (e){ D.insight = null; }
+  // open IOUs — the loans table lands with migration 0005; deployments
+  // that predate it (or a missing table) must never block a sync
+  try {
+    const lo = await sb.from("loans").select("*").eq("status","open")
+      .order("lent_date",{ascending:true});
+    D.loans = (!lo.error && lo.data) ? lo.data : [];
+  } catch (e){ D.loans = []; }
+  // subscription verdicts — sub_overrides lands with migration 0006;
+  // absent table degrades to "no verdicts". 'exclude' = dismissed;
+  // 'include' = DECLARED — a sub billed through a gateway that never
+  // emails (Stripe Link, Google Play, Microsoft's own), shown from the
+  // registry with its amount cross-checked against the budget row.
+  try {
+    const so = await sb.from("sub_overrides").select("merchant_key,verdict");
+    const rows = (!so.error && so.data) ? so.data : [];
+    D.subExcl = new Set(rows.filter(r => r.verdict === "exclude").map(r => r.merchant_key));
+    D.subIncl = new Set(rows.filter(r => r.verdict === "include").map(r => r.merchant_key));
+  } catch (e){ D.subExcl = new Set(); D.subIncl = new Set(); }
+  D.syncedAt = new Date();
+  Object.keys(VIEWCACHE).forEach(k => delete VIEWCACHE[k]);
+  CURVD = await resolveView();
+  $("#mlabel").classList.remove("stale");
+  $("#mlabel").classList.add("live");
+  $("#f-sync").textContent = "synced " + D.syncedAt.toLocaleTimeString("en-SG",{hour:"2-digit",minute:"2-digit"});
+}
+
+/* ————— sample data: file:// design preview only ————— */
+function loadSample(){
+  const m = curMonthKey();
+  D.budgets = [
+    {category:"Personal - Food & Drinks", month:m, limit_amount:600},
+    {category:"Groceries", month:m, limit_amount:500},
+    {category:"Sam Food", month:m, limit_amount:400},
+    {category:"Personal - Travel", month:m, limit_amount:250},
+    {category:"Health & Medical", month:m, limit_amount:150},
+    {category:"Miso Litter", month:m, limit_amount:60},
+    {category:"YouTrip Top-up", month:m, limit_amount:400},
+    // dedicated per-sub categories, like the real ledger (MerchantMap
+    // files wobbly bank strings into these — the detector groups on them)
+    {category:"Spotify", month:m, limit_amount:12},
+    {category:"iCloud", month:m, limit_amount:4},
+    {category:"Anthropic", month:m, limit_amount:120},
+  ];
+  D.cards = [
+    {card_id:"dbs-yuu", display_name:"DBS Yuu", payment_method_pattern:"DBS/POSB card ending 1234", cycle_start_day:24, min_spend_bonus:800},
+    {card_id:"uob-pref", display_name:"UOB Preferred", payment_method_pattern:"UOB Card ending 5678", cycle_start_day:13, min_spend_bonus:0, bonus_cap:600},
+    {card_id:"uob-one", display_name:"UOB One", payment_method_pattern:"UOB Card ending 2468", cycle_start_day:13, min_spend_bonus:500},
+    CASH_CARD,
+  ];
+  D.trips = [];
+  const today = isoDate(new Date());
+  // fixed billing days via month arithmetic — DAY_MS offsets straddled
+  // month boundaries and tripped the one-charge-per-month rule
+  const mm1 = monthShift(m, -1), mm2 = monthShift(m, -2);
+  // one open IOU so the card previews (button is inert on file:// — no sb)
+  D.loans = [{id: 1, person: "Adam", amount: 50,
+    lent_date: isoDate(new Date(Date.now() - 12*DAY_MS)), channel: "paylah", status: "open"}];
+  D.subExcl = new Set();
+  // one declared sub (no email alerts — Stripe Link) so the row previews
+  D.subIncl = new Set(["ANTHROPIC"]);
+  D.txns = [
+    {date:today, txn_time:"16:18", merchant:"KOPITIAM @ RAFFLES", amount:7.8, category:"Personal - Food & Drinks", source:"email", payment_method:"UOB Card ending 5678", notes:"", txn_id:"txn_sample_001"},
+    {date:today, txn_time:"12:40", merchant:"NTUC FairPrice", amount:61.3, category:"Groceries", source:"email", payment_method:"UOB Card ending 2468", notes:"", txn_id:"txn_sample_002"},
+    {date:today, txn_time:"09:12", merchant:"YouTrip top-up", amount:180, category:"YouTrip Top-up", source:"email", payment_method:"PayLah! Wallet (Mobile ending 9876)", notes:"", txn_id:"txn_sample_003"},
+    // one yuu partner + one non-partner so the dbs-yuu tile's second
+    // meter previews with a real split (partner spend < total spend)
+    {date:today, txn_time:"18:05", merchant:"GUARDIAN PLAZA SINGAPURA", amount:24.6, category:"Health & Medical", source:"email", payment_method:"DBS/POSB card ending 1234", notes:"", txn_id:"txn_sample_004"},
+    {date:today, txn_time:"13:22", merchant:"SUSHIRO SUNTEC", amount:32.4, category:"Personal - Food & Drinks", source:"email", payment_method:"DBS/POSB card ending 1234", notes:"", txn_id:"txn_sample_005"},
+    // recurring rows so the SUBSCRIPTIONS section previews: Spotify with
+    // a price bump this month, iCloud not charged yet (dim row) — same
+    // billing day each month, one charge per month (the strict net)
+    {date:m+"-01", txn_time:"06:02", merchant:"Spotify P424C25C39", amount:11.98, category:"Spotify", source:"email", payment_method:"UOB Card ending 5678", notes:"", txn_id:"txn_sample_006"},
+    {date:mm1+"-01", txn_time:"06:02", merchant:"Spotify P435EF3A4E", amount:10.98, category:"Spotify", source:"email", payment_method:"UOB Card ending 5678", notes:"", txn_id:"txn_sample_007"},
+    {date:mm2+"-01", txn_time:"06:02", merchant:"Spotify P446FD3328", amount:10.98, category:"Spotify", source:"email", payment_method:"UOB Card ending 5678", notes:"", txn_id:"txn_sample_008"},
+    {date:mm1+"-02", txn_time:"07:14", merchant:"APPLE.COM/BILL", amount:3.98, category:"iCloud", source:"email", payment_method:"UOB Card ending 5678", notes:"", txn_id:"txn_sample_009"},
+    {date:mm2+"-02", txn_time:"07:14", merchant:"APPLE.COM/BILL", amount:3.98, category:"iCloud", source:"email", payment_method:"UOB Card ending 5678", notes:"", txn_id:"txn_sample_010"},
+  ];
+  D.syncedAt = new Date();
+  $("#f-sync").textContent = "local preview · sample data";
+}
+
+/* ————— auth gate.
+   Standalone PWAs get a 6-digit code flow: a magic LINK opens in the
+   browser (separate storage — the session never reaches the installed
+   app), but a code typed here lands the session in the right place.
+   The email carries both; the link still works for desktop. ————— */
+async function main(){
+  if (IS_FILE || SUPABASE_PUBLISHABLE_KEY.startsWith("__")){
+    loadSample();
+    CURVD = await resolveView();
+    updateNav();
+    $("#app").hidden = false; $("#dockwrap").hidden = false;
+    renderAll();
+    if (!IS_FILE){
+      $("#f-sync").textContent = "setup: paste the publishable key into pwa/index.html";
+    }
+    return;
+  }
+
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  const { data: { session } } = await sb.auth.getSession();
+
+  if (!session){
+    $("#gate").hidden = false;
+    let sentTo = null;
+    $("#gate-send").addEventListener("click", async () => {
+      const email = $("#gate-email").value.trim();
+      if (!email) return;
+      $("#gate-send").disabled = true;
+      $("#gate-note").className = "gnote";
+      $("#gate-note").textContent = "sending…";
+      const { error } = await sb.auth.signInWithOtp({
+        email, options: { emailRedirectTo: location.origin + location.pathname },
+      });
+      $("#gate-send").disabled = false;
+      if (error){
+        console.error("signInWithOtp:", error);
+        $("#gate-note").className = "gnote err";
+        $("#gate-note").textContent = (error.message && error.message !== "{}")
+          ? error.message
+          : "couldn't send the email — check Supabase Auth Logs (usually the SMTP password)";
+      } else {
+        sentTo = email;
+        $("#codewrap").hidden = false;
+        $("#gate-msg").textContent = "Check your inbox — type the code here.";
+        $("#gate-note").textContent = "on a computer, the link in the email works too";
+        $("#gate-code").focus();
+      }
+    });
+    $("#gate-verify").addEventListener("click", async () => {
+      const token = $("#gate-code").value.trim();
+      if (!sentTo || !token) return;
+      $("#gate-verify").disabled = true;
+      $("#gate-note").className = "gnote";
+      $("#gate-note").textContent = "verifying…";
+      const { error } = await sb.auth.verifyOtp({ email: sentTo, token, type: "email" });
+      if (error){
+        console.error("verifyOtp:", error);
+        $("#gate-verify").disabled = false;
+        $("#gate-note").className = "gnote err";
+        $("#gate-note").textContent = (error.message && error.message !== "{}")
+          ? error.message : "code rejected — request a fresh one and retry";
+      }
+      // success → onAuthStateChange reloads
+    });
+    sb.auth.onAuthStateChange((_e, s) => { if (s) location.reload(); });
+    return;
+  }
+
+  $("#app").hidden = false; $("#dockwrap").hidden = false;
+  $("#signout").hidden = false; $("#fsep").hidden = false;
+  $("#bedit").hidden = false; $("#beditfoot").hidden = false;
+  $("#signout").addEventListener("click", async () => {
+    await sb.auth.signOut(); location.reload();
+  });
+  // tap the sync line to refetch on demand
+  $("#f-sync").style.cursor = "pointer";
+  $("#f-sync").addEventListener("click", async () => {
+    $("#f-sync").textContent = "syncing…";
+    try { await loadData(); renderAll(); }
+    catch (e){ $("#f-sync").textContent = "sync failed: " + e.message; }
+  });
+
+  try {
+    await loadData();
+    updateNav();
+    renderAll();
+  } catch (err){
+    // RLS returns zero rows (not an error) for the wrong login; real errors
+    // land here. Keep the shell visible, say what happened.
+    $("#mlabel").classList.add("stale");
+    $("#f-sync").textContent = "sync failed: " + err.message + " — tap to retry";
+    renderAll();
+  }
+
+  // refresh when the PWA comes back to the foreground (bookmark reopened)
+  document.addEventListener("visibilitychange", async () => {
+    if (!document.hidden && D.syncedAt && Date.now() - D.syncedAt.getTime() > 60000){
+      try { await loadData(); renderAll(); } catch (e) { /* keep stale view */ }
+    }
+  });
+}
+main();
+</script>
+</body>
+</html>

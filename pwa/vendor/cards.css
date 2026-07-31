@@ -1,0 +1,211 @@
+/* vendored from github.com/alhazjm/cards @ d9f01e5 (v1.1.0) — do not edit here */
+/*!
+ * The Muted Card System — tile stylesheet
+ * MIT licensed. https://github.com/alhazjm/cards
+ *
+ * Pair with `cardCssVars(card)` from the JS, which supplies every `--mc-*`
+ * custom property this file reads. Nothing here hard-codes a card: the
+ * stylesheet is the GEOMETRY, the custom properties are the IDENTITY. That
+ * split is the whole point — adding a card touches data, never CSS.
+ *
+ * The tile deliberately renders two pieces of text and nothing else: the card
+ * name and its last four digits. Everything a particular application wants to
+ * put on a card — balances, dates, meters, badges — is that application's
+ * content, not this system's. What the system owes it is a set of text colours
+ * that are already known-safe on the tile, which is what the `--mc-t-strong`,
+ * `--mc-t-muted`, `--mc-t-faint` and `--mc-bar-*` properties are for. They are
+ * emitted on every tile and used by none of the rules below.
+ *
+ * Markup contract:
+ *
+ *   <article class="mc-card" style="--mc-base: …; --mc-motif: …; …">
+ *     <div class="mc-card__crest" aria-hidden="true"></div>
+ *     <div class="mc-card__wash"  aria-hidden="true"></div>
+ *     <div class="mc-card__body">
+ *       <div class="mc-card__name">DBS Live Fresh</div>
+ *       <div class="mc-card__last4">•••• 0388</div>
+ *     </div>
+ *   </article>
+ *
+ * The two decorative layers must stay `aria-hidden` and must stay BEFORE the
+ * body in source order — the body is the only layer painted above the wash.
+ */
+
+.mc-card {
+  /* Fallbacks, so a tile still renders something sane if the JS never ran. */
+  --mc-base: oklch(0.955 0.005 250);
+  --mc-base-fade: oklch(0.955 0.005 250 / 0);
+  --mc-motif: none;
+  --mc-motif-size: auto;
+  --mc-scrim: 1;
+  --mc-t-title: oklch(0.22 0.02 258);
+  --mc-t-detail: oklch(0.4 0.012 258);
+  --mc-font: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --mc-radius: 16px;
+  --mc-aspect: 1.586;         /* ISO/IEC 7810 ID-1, the physical card ratio */
+  --mc-padding: 14px 16px;
+  --mc-crest-width: 44%;
+  /*
+   * The crest box's own width/height ratio, and where its motif fades out.
+   *
+   * Every motif is painted ONCE across the crest box using percentage
+   * geometry, so the box's proportion IS the artwork's proportion — stretch
+   * the box and you stretch the drawing. On a card-ratio tile 0.44 x 1.586 =
+   * 0.698 is exactly the full height, so these defaults change nothing here.
+   *
+   * If your tiles are NOT the card ratio — content-height tiles are the usual
+   * case — you do not need to touch the mask. Set the fade and leave the rest:
+   *
+   *     .my-tile { --mc-aspect: auto; --mc-crest-fade: 72%; }
+   *
+   * The crest keeps its designed proportion either way: taller tiles get a
+   * short crest that fades out, shorter ones crop it via overflow. Deforming
+   * it is the one thing that cannot happen.
+   */
+  --mc-crest-aspect: 0.698;
+  --mc-crest-fade: 100%;
+  /*
+   * How far text may run before it would leave the washed column. The wash is
+   * flat to 50% and reaches zero at 74%; the crest's mask only starts opening
+   * at 56%. Capping the name here is what makes "type never sits on an
+   * unwashed mark" a property of the geometry rather than a hope about how
+   * long card names happen to be. Widen it and you are choosing longer labels
+   * over that guarantee — the AA floor still holds either way, because the
+   * mark alphas are bounded, but the headroom shrinks.
+   */
+  --mc-text-column: 74%;
+
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  border-radius: var(--mc-radius);
+  aspect-ratio: var(--mc-aspect);
+  background: var(--mc-base);
+  box-shadow:
+    0 1px 2px oklch(0.4 0.03 258 / 0.12),
+    0 10px 24px -15px oklch(0.4 0.03 258 / 0.3);
+  font-family: var(--mc-font);
+}
+
+/*
+ * Layer 2 — the crest. Rule 04: the motif lives in the trailing 44% and fades
+ * in from the right and down across the top. The two mask gradients are
+ * intersected, so the motif reaches full strength only where both agree.
+ *
+ * `-webkit-mask-composite: source-in` is the prefixed spelling of `intersect`,
+ * not a duplicate — Safari reads the prefixed pair, current engines read the
+ * unprefixed pair. Deleting either one breaks that engine.
+ */
+.mc-card__crest {
+  position: absolute;
+  top: 0;
+  right: 0;
+  /* Deliberately NOT bottom:0 — the box is pinned to its designed proportion
+     rather than stretched to the tile. There is no max-height either: on a
+     tile shorter than the card ratio the crest overflows and .mc-card's own
+     overflow:hidden crops it, which keeps the artwork undeformed. Clamping
+     the height instead would squash it, which is the bug this replaces. */
+  width: var(--mc-crest-width);
+  height: auto;
+  aspect-ratio: var(--mc-crest-aspect);
+  pointer-events: none;
+  background-repeat: repeat;
+  background-image: var(--mc-motif);
+  background-size: var(--mc-motif-size);
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent 0, #000 48%),
+    linear-gradient(180deg, transparent 0, #000 36%, #000 var(--mc-crest-fade), transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(90deg, transparent 0, #000 48%),
+    linear-gradient(180deg, transparent 0, #000 36%, #000 var(--mc-crest-fade), transparent);
+  mask-composite: intersect;
+}
+
+/*
+ * Layer 3 — the wash. A left-to-right ramp of the tile's OWN base colour, flat
+ * across the text column and gone by 74%. This is what guarantees the pixels
+ * behind every glyph are the base and nothing else, which is in turn what lets
+ * the contrast floors hold at any motif strength.
+ *
+ * It fades to `--mc-base-fade` — the base at zero alpha — and never to the
+ * `transparent` keyword, which is transparent BLACK and would drag a grey
+ * fringe through the middle of the tile.
+ */
+.mc-card__wash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--mc-scrim);
+  background: linear-gradient(90deg, var(--mc-base) 0 50%, var(--mc-base-fade) 74%);
+}
+
+/* Layer 4 — content. The only layer above the wash. */
+.mc-card__body {
+  position: relative;
+  height: 100%;
+  box-sizing: border-box;
+  padding: var(--mc-padding);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.mc-card__name {
+  max-width: var(--mc-text-column);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 13.5px/1.3 var(--mc-font);
+  letter-spacing: -0.006em;
+  color: var(--mc-t-title);
+}
+
+/*
+ * Tabular figures so the digit group is the same width on every tile — a grid
+ * of cards with proportional numerals reads as visually noisy at this size.
+ */
+.mc-card__last4 {
+  font: 500 11px/1 var(--mc-font);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--mc-t-detail);
+}
+
+/* Interactive tiles opt in explicitly. */
+.mc-card[role="button"],
+.mc-card--action {
+  cursor: pointer;
+}
+
+.mc-card:focus-visible {
+  outline: 2px solid var(--mc-t-title);
+  outline-offset: 2px;
+}
+
+/*
+ * Forced-colors mode replaces the palette wholesale, at which point hue and
+ * motif carry nothing and the decorative layers are pure noise. Drop both and
+ * let the system colours do the work.
+ */
+@media (forced-colors: active) {
+  .mc-card {
+    background: Canvas;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+    forced-color-adjust: none;
+  }
+
+  .mc-card__crest,
+  .mc-card__wash {
+    display: none;
+  }
+
+  .mc-card__name,
+  .mc-card__last4 {
+    color: CanvasText;
+  }
+}
