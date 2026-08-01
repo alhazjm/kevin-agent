@@ -1,7 +1,7 @@
 ---
 name: weekly-summary
 description: Generates weekly and monthly expense summaries with spending insights
-version: 3.0.0
+version: 3.1.0
 author: Hadi
 license: MIT
 platforms: [linux]
@@ -41,15 +41,28 @@ metadata:
 
 ## Monthly Report (1st of Month)
 
-1. Total spending vs total budget (one line)
-2. Category breakdown — only show categories with activity
-3. Top 5 merchants
-4. One short suggestion for next month
+1. Total spending vs total budget (one line). Traffic light by the same
+   bands as everywhere else: 🟢 <80%, 🟡 80–99%, 🔴 ≥100%. When spent
+   exceeds budget, NEVER round the percentage down to a soft "100%" —
+   say `over by $X` with 🔴 (a Jul 2026 recap showed "$2,912 of $2,902
+   (100%) 🟡", hiding a real overshoot).
+2. The honesty line, straight after the total: the report's
+   `excluded_from_totals` says what the total does NOT include while the
+   PWA dashboard counts it. When `pending_count` > 0, add
+   `(excludes $X across N uncategorized txns — categorise them on the
+   dashboard or tell me)`. When `backfill_total` > 0, mention it the
+   same way. Omit the line entirely when both are zero — silence over
+   boilerplate.
+3. Category breakdown — only show categories with activity
+4. Top 5 merchants
+5. One short suggestion for next month
 
 ```
 📆 March Recap
 
 💰 $2,840 spent of $3,300 budget (86%) 🟡
+(excludes $310 across 12 uncategorized txns — categorise them on the
+dashboard or tell me)
 
 Top spend:
   🍜 Food & Drinks   $520

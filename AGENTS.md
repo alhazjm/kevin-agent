@@ -102,10 +102,10 @@ hermes-config/
                                #   Fill these in, drop the .example suffix — the Dockerfile COPYs the real names
   install.sh                   # LOCAL DEV ONLY — not in the container
 skills/                        # RUNTIME skills (ship to /root/.hermes/skills/)
-  expense-tracker/SKILL.md     # Main skill (v5.6.0): categorisation, travel routing, trips/pots, lending, silence contract
+  expense-tracker/SKILL.md     # Main skill (v5.7.0): categorisation, travel routing, trips/pots, lending, silence contract
   budget-manager/SKILL.md      # Cron-driven budget warnings / reallocation (v3.0.0)
-  weekly-summary/SKILL.md      # Friday + 1st-of-month summaries (v3.0.0)
-  card-optimiser/SKILL.md      # Cap tracking, card recs, nudges, scorecard (v1.3.0)
+  weekly-summary/SKILL.md      # Friday + 1st-of-month summaries (v3.1.0)
+  card-optimiser/SKILL.md      # Cap tracking, card recs, nudges, scorecard (v1.4.0)
 .claude/skills/                # REPO-side Claude Code skills (never ship): /statement-recon,
                                #   /card-tnc-review, /new-alert-source
 tools/
@@ -115,13 +115,15 @@ tools/
   card_optimiser.py            # Card logic + post-cap nudge hook (no registration here)
   travel_mode.py               # Trip routing, [trip:]/[bucket:] writers + bucket nudge hook (no registration here)
   loans.py                     # IOU logic: create/repay/offset-sweep (no registration here)
-supabase/migrations/           # 0001..0006 numbered SQL — THE schema reference (run BY HAND in the SQL editor)
+supabase/migrations/           # 0001..0007 numbered SQL — THE schema reference (run BY HAND in the SQL editor)
+supabase/schema.sql            # GENERATED one-paste consolidation for fresh installs — never hand-edit
+supabase/build_schema.py       # Regenerates schema.sql; a test fails if the two drift
 pwa/                           # Static PWA dashboard (separate Render Static Site; never in the container)
 recon/                         # Local statement-recon CLI (pypdf, checksum-gated parsers) — never ships
 scripts/                       # Local/ops helpers (one-time Supabase backfill, LLM-usage summariser)
 samples/                       # GITIGNORED — real e-statement PDFs live here, never committed
 sheets-template/README.md      # LEGACY sheet-era schema doc — kept for the export tab layout only
-tests/                         # 537 tests across 7 files; see "Testing"
+tests/                         # 578 tests across 8 files; see "Testing"
 conftest.py                    # Repo root; sys.path fix + stubs tools.registry (framework-injected at runtime)
 ROADMAP.md                     # Strategic direction + "Things NOT to do" — read before proposing features
 ```
@@ -569,7 +571,7 @@ Supabase; session history lives in FTS5.
 
 ## Data schema (Supabase)
 
-`supabase/migrations/0001..0006` are THE schema reference — numbered SQL
+`supabase/migrations/0001..0007` are THE schema reference — numbered SQL
 files, run BY HAND in the Supabase SQL editor, append-only (new files, new
 policies via the idempotent `do $$ … duplicate_object` pattern; `create
 table if not exists`). Fourteen tables:
@@ -601,7 +603,8 @@ The rest: `txn_id_counters` (RPC state), `insights` (derived facts, tier-4
 memory), `journal` (reply=journal narratives), `webhook_log` (audit rows
 feeding the sweep), `cards` + `card_strategy` (card optimiser inputs,
 hand-maintained; card_strategy requires the `_default` sentinel row;
-`cards.bonus_cap` since 0003), `card_nudge_log` / `trip_nudge_log` (nudge
+`cards.bonus_cap` since 0003, `cards.base_mpd` since 0007), `card_nudge_log`
+/ `trip_nudge_log` (nudge
 dedup, auto-written), `travel_mode` (trip definitions), `loans` (IOUs,
 0005), `sub_overrides` (subscription verdicts, 0006 — keys are normalized
 CATEGORY names).
@@ -711,11 +714,12 @@ pytest tests/ -k "idempotency"                # by keyword
 ```
 
 On Windows: `.venv-test/Scripts/python.exe -m pytest tests/ -q`.
-Current count: **537 passing** across seven files:
+Current count: **578 passing** across eight files:
 `test_expense_sheets_tool` (also covers `sheets_client`),
 `test_supabase_client`, `test_card_optimiser`, `test_travel_mode`,
-`test_loans`, `test_email_parser` (the Apps Script mirror, M16), and
-`test_statement_recon`. State the new total in every PR body.
+`test_loans`, `test_email_parser` (the Apps Script mirror, M16),
+`test_statement_recon`, and `test_schema_consolidation` (keeps
+`supabase/schema.sql` honest against the migrations). State the new total in every PR body.
 
 ## Checklists
 
@@ -742,6 +746,10 @@ Current count: **537 passing** across seven files:
    one): `create table if not exists`, policies via the idempotent
    `do $$ … duplicate_object` pattern. NEVER rename, reorder, or delete
    existing columns/tables (ask first — escalation rules).
+1b. Regenerate the one-paste consolidation in the SAME commit:
+   `python supabase/build_schema.py`. `tests/test_schema_consolidation.py`
+   fails if you forget, and a stale `schema.sql` silently omits your table
+   from every fresh install. Never hand-edit `schema.sql`.
 2. The migration runs BY HAND in the Supabase SQL editor — the PR body
    must name it as a manual step (surface 3).
 3. Code degrades gracefully pre-migration (guarded reads, absent table →

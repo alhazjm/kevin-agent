@@ -105,7 +105,15 @@ def create_loan(person: str, amount: float, lent_date: str | None = None,
                 notes: str = "") -> dict:
     """Record a new IOU. `txn_id` optionally links the outflow ledger row
     (the transfer that left the account); '' for cash loans with no bank
-    alert. Returns {"status": "created", "loan": {...}}."""
+    alert. Returns {"status": "created", "loan": {...}, "recategorised":
+    bool}.
+
+    When a txn is linked, this ALSO recategorises it to "Lending" —
+    atomically with loan creation, not as a separate skill step. The skill
+    used to instruct a follow-up edit_expense call and the agent skipped
+    it (2026-08-01: the Shopee-for-Dad loan stayed in Groceries, dinging
+    the Groceries budget with money that comes back, while claiming
+    "(Lending)" in the reply). Deterministic beats prompt discipline."""
     person = (person or "").strip()
     if not person:
         return {"status": "error", "message": "person is required"}
@@ -133,7 +141,32 @@ def create_loan(person: str, amount: float, lent_date: str | None = None,
         txn_id=str(txn_id or ""),
         notes=str(notes or ""),
     )
-    return {"status": "created", "loan": _loan_shape(rec)}
+
+    # Move the linked outflow to the reserved Lending category.
+    # create_category=True mirrors the repayment-offset path: "Lending"
+    # auto-creates at $0 on very first use (the guard otherwise refuses —
+    # exactly how the live edit_expense attempt failed pre-first-repayment).
+    # Failure is NON-FATAL: the loan row already exists, and the skill
+    # surfaces `recategorised: false` so the agent can retry.
+    recategorised = False
+    recat_error = ""
+    if txn_id:
+        try:
+            edit = supabase_client.edit_transaction(
+                merchant="", amount=0, txn_id=str(txn_id),
+                updates={"Category": LENDING_CATEGORY},
+                create_category=True)
+            recategorised = edit.get("status") == "ok"
+            if not recategorised:
+                recat_error = str(edit.get("message") or edit.get("status", ""))
+        except Exception as exc:   # the loan must survive a ledger hiccup
+            recat_error = f"{exc}"
+
+    result = {"status": "created", "loan": _loan_shape(rec),
+              "recategorised": recategorised}
+    if recat_error:
+        result["recategorise_error"] = recat_error
+    return result
 
 
 def list_open_loans() -> dict:

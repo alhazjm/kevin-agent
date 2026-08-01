@@ -1,7 +1,7 @@
 ---
 name: card-optimiser
 description: Recommends the best credit card per category, tracks monthly cap progress, and scores miles earned vs optimal
-version: 1.3.0
+version: 1.4.0
 author: Hadi
 license: MIT
 platforms: [linux]
@@ -112,29 +112,31 @@ Traffic lights: 🟢 ok (<80%), 🟡 warning (80–99%), 🔴 capped (≥100%).
 The 1st-of-month cron passes both `expense-tracker` and `card-optimiser`
 skills. After the expense report is presented, extend it with:
 
-1. Call `plan_month()` to present this month's strategy:
-   ```
-   💳 This month's plan:
-     🍜 Dining → DBS Altitude (4 mpd, $1000 cap)
-     🚌 Transport → Citi PM (3 mpd, $600 cap)
-     🛒 Groceries → UOB PRVI (2.4 mpd, no cap)
-   ```
+1. Call `plan_month()` and present its `plan_lines` VERBATIM — one
+   bullet each, under a `💳 This month's plan` header line. The tool has
+   already collapsed every category that just follows the default row
+   into a single "Everything else →" line; do NOT re-expand the full
+   `plan` list into one line per category, and do NOT re-derive lines
+   from `plan` yourself.
 2. Mention any active promo overrides (`promo_active_until` non-empty)
    and when they expire.
 3. Mention any `reverted_promos` from the result — these are promos that
    just lazily reverted, so the user knows the plan changed back.
 4. Call `review_card_efficiency(month=<last month>)` and present the
-   scorecard:
+   scorecard using the tool's preformatted strings VERBATIM —
+   `summary_line` first, then `top_missed_lines` as-is:
    ```
    📊 March scorecard:
-   You earned 4,320 miles. Optimal would have been 4,642.
-   Left 322 miles on the table across 3 transactions:
-     • Warung Gembira ($42) → used Citi, should have been DBS (-118)
-     • GrabFood ($18) → used Citi, should have been UOB PRVI (-34)
-     • NTUC ($85) → used DBS, should have been UOB PRVI (-170)
+   You earned 4,320 miles · optimal would have been 4,642 · left on the
+   table: 322
+     • NTUC ($85.00) — used DBS Altitude, should have been UOB PRVI (–170)
+     • Warung Gembira ($42.00) — used Citi PM, should have been DBS (–118)
    ```
-5. Keep the suboptimal list to the top 3–5 by `miles_lost` — don't dump
-   the full list if it's long.
+   Copy card names EXACTLY as the lines carry them — a Jul 2026 recap
+   paraphrased a line and swapped in the wrong card. Never rebuild these
+   lines from `transactions_suboptimal`.
+5. When `unmapped_payment_methods` > 0, add one honest line:
+   `(<N> txns had no matching card and scored 0 in this model.)`
 
 ## Flow: promo override
 

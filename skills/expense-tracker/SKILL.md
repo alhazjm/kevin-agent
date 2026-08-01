@@ -1,7 +1,7 @@
 ---
 name: expense-tracker
-description: Categorizes bank transactions and logs them to Google Sheets budget tracker
-version: 5.6.0
+description: Categorizes bank transactions and logs them to the Supabase expense ledger
+version: 5.7.0
 author: Hadi
 license: MIT
 platforms: [linux]
@@ -90,7 +90,10 @@ metadata:
    obviously meant, retry with that exact name; otherwise ask the user.
    Pass `create_category: true` ONLY when the user themselves asked for a
    brand-new category by that exact name (e.g. "split $48 into personal -
-   parents") — never on your own judgment.
+   parents") — never on your own judgment. ONE exception: the reserved
+   `Lending` category (loan flows) may always be created with
+   `create_category: true` — it is system-reserved, not user-invented,
+   and the PWA hides it from budget bars by design.
 
 ## Transaction Sources
 
@@ -311,7 +314,7 @@ outflow when summarising.
 - Foreign-currency taps arrive FX-converted with an `orig:` note — the
   normal travel-mode activation signal applies.
 
-## Lending & IOUs (v5.6)
+## Lending & IOUs (v5.7)
 
 Lending is NOT a budget to burn down — it is money that comes back. The
 `loans` table tracks each IOU until repaid; repayment logs an offsetting
@@ -323,12 +326,16 @@ was a loan"):
 1. Resolve the outflow txn if one was logged (reply-to flow or free-text
    lookup) — its `txn_id` links the loan to the ledger.
 2. Call `create_loan(person=..., amount=..., lent_date=..., channel=...,
-   txn_id=<outflow txn_id or omit>)`.
-3. Recategorise the outflow txn to `Lending` via
-   `edit_expense(txn_id=..., new_category="Lending")`. On FIRST use the
-   category won't exist (`status: "unknown_category"`): confirm with the
-   user, then retry with `create_category: true` — it auto-creates at $0
-   and the PWA hides `Lending` from budget bars by design.
+   txn_id=<outflow txn_id or omit>)`. When a `txn_id` is passed, the
+   tool ALSO recategorises that txn to `Lending` itself (auto-creating
+   the $0 category on first use; the PWA hides `Lending` from budget
+   bars by design) — do NOT make a separate `edit_expense` call for it.
+3. Check `recategorised` in the result. `true` → nothing more to do.
+   `false` with a `recategorise_error` → the loan EXISTS but the txn kept
+   its old category: say so honestly in your confirmation and retry once
+   with `edit_expense(txn_id=..., new_category="Lending",
+   create_category=true)`. Never claim the recategorisation happened
+   when the field says it didn't.
 4. Confirm in one short line: `🤝 Loan recorded: $50 to Sarah (paylah).`
 
 **When the user asks "who owes me money?"** call `list_open_loans()` and

@@ -96,7 +96,7 @@ their real names, so your filled-in copies can never be pushed here by
 accident; commit them to your own fork deliberately if you want Render to
 build from them.
 
-**Verify:** `pytest tests/ -q` → **537 passed**, in about a second, with no
+**Verify:** `pytest tests/ -q` → **578 passed**, in about a second, with no
 network. On Windows: `.venv-test/Scripts/python.exe -m pytest tests/ -q`.
 
 ---
@@ -214,9 +214,23 @@ rewrite needed.
 > next person to run `0001` on a fresh project silently gets different
 > access rules.
 
-### 3.3 Run the SQL, in order
+### 3.3 Run the SQL
 
-Open the Supabase SQL editor and run, one at a time:
+**The short version: open the Supabase SQL editor, paste all of
+[`supabase/schema.sql`](../supabase/schema.sql), run it once. Done.**
+
+That file is every migration concatenated in order — one paste instead of
+seven, and if any statement fails the whole thing rolls back instead of
+leaving you with a half-built database. Change the email in `is_owner()`
+first (3.2); the file says so at the top.
+
+It is generated, never hand-written: `python supabase/build_schema.py`
+rebuilds it, and `tests/test_schema_consolidation.py` fails the suite if it
+ever drifts from the migrations. So it cannot quietly go stale.
+
+The numbered files under `supabase/migrations/` remain the source of truth,
+and you want them if you are upgrading an existing database rather than
+building a new one — run only the ones you have not run yet, in order:
 
 1. `supabase/migrations/0001_init.sql` — the core schema, `next_txn_id()`,
    RLS enabled on every table with a SELECT-only `owner_read` policy.
@@ -233,12 +247,23 @@ Open the Supabase SQL editor and run, one at a time:
 6. `supabase/migrations/0006_sub_overrides.sql` — `sub_overrides`, the
    subscription-detector verdict table (keys are normalized **category**
    names, not merchants).
+7. `supabase/migrations/0007_cards_base_mpd.sql` — adds `cards.base_mpd`, a
+   card's flat "everything else" earn rate. The month-end scorecard uses it
+   to value spend that fell outside a category's strategy row. Same caveat
+   as 0003: the `update` lines carry the original deployment's card ids, so
+   adjust or skip them. Skipping the whole file is silent-but-wrong — the
+   column reads as 0 and the scorecard over-reports "miles left on the
+   table".
 There is deliberately no seed file for `cards` / `card_strategy` — those
 rows describe whichever cards you actually carry. Write your own (see 3.4).
 
 All of them are written to be re-runnable (`create table if not exists`,
-policies via the idempotent `do $$ … duplicate_object` pattern). Migrations
-are append-only: never edit one that has already run.
+policies via the idempotent `do $$ … duplicate_object` pattern), so running
+`schema.sql` over a database that already has some of them is safe.
+
+Migrations are append-only: never edit one that has already run, and never
+edit `schema.sql` by hand. A new schema change is a new numbered file plus a
+regenerate, in the same commit.
 
 That is 14 tables when you are done — `transactions`, `budgets`,
 `merchant_map`, `txn_id_counters`, `insights`, `journal`, `webhook_log`,

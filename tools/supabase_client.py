@@ -49,12 +49,18 @@ import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-# Single source of truth for the dedup formula + pending semantics (M17).
+# Single source of truth for the dedup formula + pending/backfill/pot
+# semantics (M17; the aggregate predicates are shared because they are
+# byte-identical on both backends).
 from tools.sheets_client import (
     PENDING_CATEGORY,
     TXN_ID_PATTERN,
     _compute_idempotency_key,
+    _counts_in_totals,
+    _is_backfill,
     _is_pending,
+    _is_pot_internal,
+    _rebucket_category,
 )
 
 __all_the_same_surface__ = True  # marker: keep function list in sync with sheets_client
@@ -574,6 +580,21 @@ def ensure_category_exists(category: str) -> dict:
 # --- aggregation (verbatim sheets_client bodies over this module's readers) --
 
 
+def _trip_category_map() -> dict[str, str]:
+    """label → trip_category from travel_mode, {} when unavailable (the
+    guarded-read pattern: an absent table or a transient read failure must
+    never break a report). Feeds _rebucket_category so a [trip:]-tagged
+    top-up consumes the TRIP's budgets row — the PWA does the same, and
+    without it an all-YouTrip trip reads $0 spent of its budget."""
+    try:
+        return {str(r.get("label", "")).strip(): str(r.get("trip_category", "")).strip()
+                for r in read_travel_mode_records()
+                if str(r.get("label", "")).strip()
+                and str(r.get("trip_category", "")).strip()}
+    except Exception:
+        return {}
+
+
 def get_spending_summary(month: str | None = None) -> dict:
     if not month:
         month = datetime.now().strftime("%Y-%m")
@@ -581,6 +602,7 @@ def get_spending_summary(month: str | None = None) -> dict:
     month_num = int(month.split("-")[1])
     transactions = read_transactions(month)
     budgets = {b["Category"]: b["Monthly Limit"] for b in read_budgets(month_num)}
+    trips = _trip_category_map()
 
     spending = {}
     pending_count = 0
@@ -588,7 +610,9 @@ def get_spending_summary(month: str | None = None) -> dict:
         if _is_pending(t):
             pending_count += 1
             continue
-        cat = t.get("Category", "Miscellaneous")
+        if not _counts_in_totals(t):
+            continue
+        cat = _rebucket_category(t, trips)
         amt = float(t.get("Amount", 0))
         spending[cat] = spending.get(cat, 0) + amt
 
@@ -639,10 +663,13 @@ def generate_spending_report(month: str | None = None) -> dict:
     prev_year = year if month_num > 1 else year - 1
     prev_month_str = f"{prev_year}-{prev_month_num:02d}"
     prev_transactions = read_transactions(prev_month_str)
+    trips = _trip_category_map()
 
     category_spend: dict[str, float] = defaultdict(float)
     category_txns: dict[str, list[str]] = defaultdict(list)
     pending_rows = []
+    backfill_count, backfill_total = 0, 0.0
+    yt_count, yt_total = 0, 0.0
     for t in transactions:
         if _is_pending(t):
             pending_rows.append({
@@ -652,7 +679,15 @@ def generate_spending_report(month: str | None = None) -> dict:
                 "date": str(t.get("Date", "")),
             })
             continue
-        cat = t.get("Category", "Miscellaneous")
+        if _is_backfill(t):
+            backfill_count += 1
+            backfill_total += float(t.get("Amount", 0))
+            continue
+        if _is_pot_internal(t):
+            yt_count += 1
+            yt_total += float(t.get("Amount", 0))
+            continue
+        cat = _rebucket_category(t, trips)
         amt = float(t.get("Amount", 0))
         category_spend[cat] += amt
         txn_id = t.get("txn_id", "")
@@ -677,7 +712,7 @@ def generate_spending_report(month: str | None = None) -> dict:
     merchant_spend: dict[str, float] = defaultdict(float)
     merchant_count: dict[str, int] = defaultdict(int)
     for t in transactions:
-        if _is_pending(t):
+        if not _counts_in_totals(t):
             continue
         m = t.get("Merchant", "Unknown")
         merchant_spend[m] += float(t.get("Amount", 0))
@@ -692,25 +727,28 @@ def generate_spending_report(month: str | None = None) -> dict:
 
     daily_spend: dict[str, float] = defaultdict(float)
     for t in transactions:
-        if _is_pending(t):
+        if not _counts_in_totals(t):
             continue
         d = str(t.get("Date", ""))
         daily_spend[d] += float(t.get("Amount", 0))
     daily = [{"date": d, "total": round(s, 2)}
              for d, s in sorted(daily_spend.items())]
 
+    # Both sides of the MoM comparison use the same predicate — comparing a
+    # filtered current month against an unfiltered previous month would
+    # manufacture phantom swings.
     prev_total = sum(
-        float(t.get("Amount", 0)) for t in prev_transactions if not _is_pending(t)
+        float(t.get("Amount", 0)) for t in prev_transactions if _counts_in_totals(t)
     )
     curr_total = sum(
-        float(t.get("Amount", 0)) for t in transactions if not _is_pending(t)
+        float(t.get("Amount", 0)) for t in transactions if _counts_in_totals(t)
     )
 
     prev_cat_spend: dict[str, float] = defaultdict(float)
     for t in prev_transactions:
-        if _is_pending(t):
+        if not _counts_in_totals(t):
             continue
-        cat = t.get("Category", "Miscellaneous")
+        cat = _rebucket_category(t, trips)
         prev_cat_spend[cat] += float(t.get("Amount", 0))
 
     mom_changes = []
@@ -745,7 +783,20 @@ def generate_spending_report(month: str | None = None) -> dict:
         },
         "pending_review": {
             "count": len(pending_rows),
+            "total": round(sum(r["amount"] for r in pending_rows), 2),
             "rows": pending_rows,
+        },
+        # The recap's honesty line: the PWA hero COUNTS pending+backfill
+        # (honest cash-out), this report does not (M14) — stating what was
+        # excluded is what lets the two totals reconcile at a glance
+        # (Jul 2026: a silent $667 gap across 26 pending rows).
+        "excluded_from_totals": {
+            "pending_count": len(pending_rows),
+            "pending_total": round(sum(r["amount"] for r in pending_rows), 2),
+            "backfill_count": backfill_count,
+            "backfill_total": round(backfill_total, 2),
+            "youtrip_spend_count": yt_count,
+            "youtrip_spend_total": round(yt_total, 2),
         },
     }
 
@@ -1064,12 +1115,10 @@ def get_insights(month: str | None = None, category: str | None = None,
 
 
 def _insightable(t: dict) -> bool:
-    """Rows that count toward insight aggregates: excludes UNCATEGORIZED
-    (still awaiting a category pick) and backfill statement imports (M14 —
-    counting them corrupts month-over-month comparisons)."""
-    if _is_pending(t):
-        return False
-    return str(t.get("Source", "")).strip().lower() != "backfill"
+    """Rows that count toward insight aggregates — same predicate as the
+    report totals: excludes UNCATEGORIZED, backfill imports (M14), and
+    pot-internal YouTrip spends."""
+    return _counts_in_totals(t)
 
 
 def generate_daily_insight(month: str | None = None) -> dict:

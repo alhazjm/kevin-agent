@@ -887,7 +887,10 @@ EDIT_EXPENSE_SCHEMA = {
                 "description": (
                     "Set true ONLY when the user themselves asked for a "
                     "brand-new budget category by that exact name. Never set "
-                    "it on your own judgment."
+                    "it on your own judgment — with ONE exception: the "
+                    "reserved `Lending` category (loan flows) may always be "
+                    "created this way; it is system-reserved, not "
+                    "user-invented."
                 ),
             },
             "new_notes": {
@@ -2685,9 +2688,11 @@ CREATE_LOAN_SCHEMA = {
         "Record an IOU in the loans table. Use when the user says a "
         "transfer or payment was a loan ('that $50 PayLah to Sarah was a "
         "loan'). Pass txn_id when the outflow was logged as a ledger "
-        "transaction (also recategorise that txn to 'Lending' per the "
-        "skill flow). Lending is NOT a budget — the loan sits open until "
-        "the user reports repayment (mark_loan_repaid)."
+        "transaction — the tool then recategorises that txn to 'Lending' "
+        "ITSELF; do NOT call edit_expense for it. Check `recategorised` "
+        "in the result and be honest when it is false. Lending is NOT a "
+        "budget — the loan sits open until the user reports repayment "
+        "(mark_loan_repaid)."
     ),
     "parameters": {
         "type": "object",

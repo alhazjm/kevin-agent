@@ -2,7 +2,7 @@
 
 Bank emails → Gmail webhook → tool-calling LLM agent → Postgres ledger → Telegram replies + a receipt-styled PWA dashboard. A personal-finance agent built for the Singapore context (DBS/UOB/HSBC email shapes, SGD, the local card-rewards game), deployed on a $7/mo Render box.
 
-This is the production code I run daily, scrubbed of personal data: **37 tools · 4 versioned skills · 537 tests**. Sample identifiers (card numbers, merchants, emails) are fictional; the personal memory files ship as `.example` templates. Clone it, configure it to your banks, and it's yours — [**docs/SETUP.md**](docs/SETUP.md) is the runbook.
+This is the production code I run daily, scrubbed of personal data: **37 tools · 4 versioned skills · 578 tests**. Sample identifiers (card numbers, merchants, emails) are fictional; the personal memory files ship as `.example` templates. Clone it, configure it to your banks, and it's yours — [**docs/SETUP.md**](docs/SETUP.md) is the runbook.
 
 ---
 
@@ -211,7 +211,7 @@ A different species: workflows in [`.claude/skills/`](.claude/skills/) run by a 
 | Ingress | Telegram bot + Gmail Apps Script (HMAC-signed webhook, audit-before-send) |
 | Egress | Telegram + 7 cron schedules (SGT wall-clock) |
 | Deploy | Docker on Render (Singapore), ~$7/mo all-in |
-| Tests | pytest — 537 tests, ~1s, no network |
+| Tests | pytest — 578 tests, ~1s, no network |
 
 ---
 
@@ -240,7 +240,7 @@ The deployed instance also carries card-strategy research — issuer T&C extract
 
 ```bash
 pip install pytest gspread google-auth cffi
-pytest tests/ -q        # 537 tests, ~1s, no network
+pytest tests/ -q        # 578 tests, ~1s, no network
 ```
 
 `cffi` is a hidden hard dependency — without it pytest dies at collection with `pyo3_runtime.PanicException`. `conftest.py` stubs the framework-injected tool registry, so the suite runs without hermes-agent installed.

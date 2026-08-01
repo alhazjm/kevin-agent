@@ -1095,7 +1095,13 @@ function renderPulse(C){
   const spentCol = chartOver ? "var(--over)" : "var(--ink)";
   const gy = y(C.budgetTotal);
   let budLabY = gy - 8;
-  let slx = tx - 14, sly = ty - 12;
+  // Spent label sits left of the dot ("end"-anchored at tx−14) — which
+  // renders entirely OFF-CANVAS on day 1–2 of a month, when the dot hugs
+  // the left edge (Aug 2026: only the label's last digit peeked in).
+  // Near that edge it flips to the right of the dot instead; the scrub
+  // label above solves the same problem by clamping.
+  let slx = tx - 14, sly = ty - 12, sanchor = "end";
+  if (tx - padX < 56){ slx = tx + 14; sanchor = "start"; }
   if (X1 - tx < 96 && Math.abs(ty - gy) < 26){
     if (C.spent >= C.budgetTotal) budLabY = Math.max(gy + 18, ty + 26);
     else sly = ty + 24;
@@ -1122,7 +1128,7 @@ function renderPulse(C){
       ${live ? `<line x1="${tx.toFixed(1)}" x2="${tx.toFixed(1)}" y1="${(ty+7).toFixed(1)}" y2="150"
         style="stroke:var(--hairS)" stroke-dasharray="2 3"/>` : ""}
       ${dot(tx, ty)}
-      <text x="${slx.toFixed(1)}" y="${sly.toFixed(1)}" text-anchor="end"
+      <text x="${slx.toFixed(1)}" y="${sly.toFixed(1)}" text-anchor="${sanchor}"
         font-size="12" font-weight="650" style="fill:${spentCol}">${fmt0(C.spent)}</text>
       ${live ? `<text x="${tx.toFixed(1)}" y="168" text-anchor="middle" font-size="9.5"
         style="fill:var(--ter)">${C.ytd ? MONNAMES[C.ytdStart+C.seriesLen-2] : "today"}</text>` : ""}`;

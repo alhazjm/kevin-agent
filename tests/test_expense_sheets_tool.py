@@ -3561,3 +3561,59 @@ class TestCategoryGuardLearnAndBudget:
         assert result["category"] == "Groceries"
         upsert_body = req.call_args_list[1][1]["body"]
         assert upsert_body[0]["category"] == "Groceries"
+
+
+class TestCountsInTotals:
+    """The shared aggregate predicate (sheets_client, imported by
+    supabase_client — M14 + the pot rule in one place)."""
+
+    def test_clean_email_row_counts(self):
+        from tools.sheets_client import _counts_in_totals
+        assert _counts_in_totals({"Category": "Groceries", "Source": "email",
+                                  "Payment Method": "UOB Card ending 5678"})
+
+    def test_pending_backfill_and_youtrip_spends_do_not(self):
+        from tools.sheets_client import _counts_in_totals
+        assert not _counts_in_totals({"Category": "UNCATEGORIZED",
+                                      "Source": "email", "Payment Method": "x"})
+        assert not _counts_in_totals({"Category": "Groceries",
+                                      "Source": "backfill",
+                                      "Payment Method": "x"})
+        assert not _counts_in_totals({"Category": "Travel - JB",
+                                      "Source": "email",
+                                      "Payment Method": "YouTrip Card"})
+
+    def test_youtrip_topup_funded_by_bank_card_counts(self):
+        # The top-up IS the counted outflow — only pot-internal SPENDS
+        # (Payment Method carries "YouTrip") are excluded.
+        from tools.sheets_client import _counts_in_totals
+        assert _counts_in_totals({"Category": "YouTrip Top-up",
+                                  "Source": "email",
+                                  "Payment Method": "DBS/POSB card ending 4321"})
+
+
+class TestRebucketCategory:
+    """PWA spendByCat twin: [trip:]-tagged top-ups consume the TRIP's
+    category so an all-YouTrip trip doesn't read $0 of its budget."""
+
+    def test_tagged_topup_moves_to_trip_category(self):
+        from tools.sheets_client import _rebucket_category
+        row = {"Category": "YouTrip Top-up",
+               "Notes": "[trip:JB 2026-08] orig: SGD 300"}
+        assert _rebucket_category(
+            row, {"JB 2026-08": "Travel - JB"}) == "Travel - JB"
+
+    def test_untagged_or_unknown_label_stays(self):
+        from tools.sheets_client import _rebucket_category
+        trips = {"JB 2026-08": "Travel - JB"}
+        assert _rebucket_category(
+            {"Category": "YouTrip Top-up", "Notes": ""}, trips) == "YouTrip Top-up"
+        assert _rebucket_category(
+            {"Category": "YouTrip Top-up", "Notes": "[trip:ID 2026-04]"},
+            trips) == "YouTrip Top-up"
+
+    def test_non_topup_rows_never_move(self):
+        from tools.sheets_client import _rebucket_category
+        assert _rebucket_category(
+            {"Category": "Groceries", "Notes": "[trip:JB 2026-08]"},
+            {"JB 2026-08": "Travel - JB"}) == "Groceries"

@@ -29,7 +29,7 @@ echo "Created: Friday 6 PM weekly summary"
 # 1st of month 9 AM — monthly report (+ card plan + last-month card scorecard)
 hermes cron create \
     "0 9 1 * *" \
-    "Generate last month's final expense report first. Show total spent vs budget, category breakdown, top merchants, and one suggestion for this month. Use Telegram-friendly formatting: short bullet lines, no markdown tables or headers. Then: (1) call plan_month() and present THIS month's card strategy (one line per category: primary card, earn rate, cap). Mention any active promos and their expiry dates. (2) Call review_card_efficiency(month=<last month in YYYY-MM>) and present a scorecard: miles earned vs optimal, miles left on table, and the top 3–5 suboptimal transactions by miles_lost. If either card tool returns status='setup_required', skip its section — don't warn the user." \
+    "Generate last month's final expense report first. Show total spent vs budget (red when over — say 'over by \$X', never a rounded-down 100%), the excluded_from_totals honesty line when anything was excluded, category breakdown, top merchants, and one suggestion for this month. Use Telegram-friendly formatting: short bullet lines, no markdown tables or headers. Then: (1) call plan_month() and present its plan_lines VERBATIM. Mention any active promos and their expiry dates. (2) Call review_card_efficiency(month=<last month in YYYY-MM>) and present its summary_line and top_missed_lines VERBATIM — never rebuild or paraphrase them. If either card tool returns status='setup_required', skip its section — don't warn the user." \
     --skill weekly-summary \
     --skill budget-manager \
     --skill card-optimiser \

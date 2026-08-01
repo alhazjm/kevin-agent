@@ -22,7 +22,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from tools import supabase_client
-from tools.supabase_client import _is_pending
+from tools.supabase_client import _is_pending, _is_pot_internal
 
 DEFAULT_STRATEGY_KEY = "_default"
 
@@ -78,6 +78,12 @@ def read_cards() -> list[dict]:
             # (0003 migration makes it reproducible) — calendar-month bonus
             # spend cap in S$; 0 = none/uncapped
             "bonus_cap": _as_float(r.get("bonus_cap")),
+            # base_mpd (0007): the card's flat everything-else earn rate.
+            # review_card_efficiency uses it for cards outside a category's
+            # strategy row — Vantage's uncapped 1.5 was previously scored
+            # as 0, which alone overstated Jul 2026's "miles left on the
+            # table". Absent column → 0.0, the exact pre-0007 behavior.
+            "base_mpd": _as_float(r.get("base_mpd")),
             "notes": str(r.get("notes", "")),
         })
     return cards
@@ -709,10 +715,48 @@ def plan_month(month: str | None = None) -> dict:
             "promo_active_until": s.get("promo_active_until", ""),
         })
 
+    # Preformatted, deduped rendering: category rows identical to the
+    # _default sentinel are noise (the Jul 2026 recap printed 14
+    # near-identical lines). The skill presents plan_lines verbatim.
+    default_row = next(
+        (p for p in plan
+         if p.get("category") == DEFAULT_STRATEGY_KEY and "error" not in p),
+        None)
+
+    def _cap_text(cap: float) -> str:
+        return "uncapped" if not cap else f"cap ${cap:g}"
+
+    def _same_as_default(p: dict) -> bool:
+        if default_row is None or "error" in p:
+            return False
+        a, d = p["primary_card"], default_row["primary_card"]
+        return (a["card_id"] == d["card_id"]
+                and a["earn_rate"] == d["earn_rate"]
+                and a["cap"] == d["cap"])
+
+    plan_lines = []
+    for p in plan:
+        if "error" in p or p.get("category") == DEFAULT_STRATEGY_KEY:
+            continue
+        if _same_as_default(p):
+            continue
+        c = p["primary_card"]
+        promo = (f" (promo until {p['promo_active_until']})"
+                 if p.get("promo_active_until") else "")
+        plan_lines.append(
+            f"- {p['category']} → {c['display_name']} @{c['earn_rate']:g} "
+            f"mpd, {_cap_text(c['cap'])}{promo}")
+    if default_row is not None:
+        d = default_row["primary_card"]
+        plan_lines.append(
+            f"- Everything else → {d['display_name']} @{d['earn_rate']:g} "
+            f"mpd, {_cap_text(d['cap'])}")
+
     return {
         "status": "ok",
         "month": month or as_of.strftime("%Y-%m"),
         "plan": plan,
+        "plan_lines": plan_lines,
         "reverted_promos": reverted,
     }
 
@@ -741,15 +785,30 @@ def review_card_efficiency(month: str | None = None) -> dict:
     suboptimal = []
     unmapped_count = 0
     spent_running: dict[tuple[str, str], float] = defaultdict(float)
+    # Pattern-steered optimal spend per card — bounds the override by the
+    # card's calendar-month bonus_cap, the same pool the live nudge gates
+    # on (_steer_target_has_headroom). Approximation: organic spend on the
+    # steer target isn't counted against the pool here.
+    steer_spent: dict[str, float] = defaultdict(float)
+    # Running calendar-month spend per ACTUAL card, for the min-spend
+    # endorsement mirror (approximates _calendar_month_spend from the rows
+    # this loop already walks — same month, same exclusions).
+    cal_spent: dict[str, float] = defaultdict(float)
 
     for r in txns:
         if _is_pending(r):
             continue
         if str(r.get("Source", "")).strip().lower() == "backfill":
             continue
+        if _is_pot_internal(r):
+            # YouTrip-card spends can't earn miles and were counting as
+            # "unmapped" noise in the scorecard.
+            continue
         category = str(r.get("Category", "")).strip()
         amount = _as_float(r.get("Amount"))
         payment_method = str(r.get("Payment Method", ""))
+        merchant = str(r.get("Merchant", ""))
+        m_up = merchant.upper()
         txn_id = str(r.get("txn_id", ""))
         date_str = str(r.get("Date", ""))
 
@@ -770,6 +829,28 @@ def review_card_efficiency(month: str | None = None) -> dict:
             optimal_id = strat.get("fallback_card_id") or primary_id
             optimal_rate = strat.get("fallback_earn_rate", 0.0)
 
+        # Merchant patterns override the category row: category strategies
+        # are too coarse for merchants the nudge already knows better about
+        # (Grab in a yuu-primary category, WATSONS in the not-partner
+        # list). Exception: an override BACK to a capped-out primary is
+        # ignored — a pattern can't un-blow a cap.
+        override_id = _pattern_optimal(merchant, cards_by_id)
+        if override_id and override_id not in (optimal_id, primary_id):
+            override_card = cards_by_id.get(override_id, {})
+            override_cap = _as_float(override_card.get("bonus_cap"))
+            if override_id == strat.get("fallback_card_id"):
+                optimal_rate = strat.get("fallback_earn_rate", 0.0)
+            elif override_cap > 0 and steer_spent[override_id] >= override_cap:
+                # The steer target's modeled bonus pool is spent — the
+                # live nudge gates the same steer on headroom
+                # (steer_target_capped). Past the cap the card still
+                # earns its base rate; no unlimited phantom miles.
+                optimal_rate = _as_float(override_card.get("base_mpd"))
+            else:
+                optimal_rate = _PATTERN_STEER_RATES.get(override_id, 0.0)
+                steer_spent[override_id] += amount
+            optimal_id = override_id
+
         if actual_card is None:
             unmapped_count += 1
             actual_rate = 0.0
@@ -786,7 +867,56 @@ def review_card_efficiency(month: str | None = None) -> dict:
             elif actual_card_id == strat.get("fallback_card_id"):
                 actual_rate = strat.get("fallback_earn_rate", 0.0)
             else:
-                actual_rate = 0.0
+                # Off-strategy card: its flat base rate (cards.base_mpd,
+                # 0007), not zero — Vantage's uncapped 1.5 is real miles.
+                actual_rate = _as_float(actual_card.get("base_mpd"))
+
+        # dbs-yuu earns its bonus only on PARTNER merchants — for anything
+        # else the strategy row's rate is phantom miles (the 0.25% trap,
+        # "the single most expensive habit"). Same knowledge as the
+        # nudge's not-partner branch, applied to the ACTUAL side so the
+        # optimal floor below can't lift optimal back onto miles yuu never
+        # paid (adversarial-review catch: Grab paid ON the yuu card scored
+        # zero loss). For merchants no pattern knows, the credit line
+        # right after restores the strategy's benefit of the doubt.
+        if (actual_card is not None and actual_card_id == "dbs-yuu"
+                and not any(p in m_up for p in _YUU_PARTNER_PATTERNS)):
+            actual_rate = min(actual_rate, _as_float(actual_card.get("base_mpd")))
+
+        # Using the card the model itself recommends earns the modeled
+        # rate — without this, a pattern-steered card sitting outside the
+        # category's strategy row (WATSONS tapped on uob-pref) would be
+        # scored at base rate against its own recommendation.
+        if actual_card is not None and actual_card_id == optimal_id:
+            actual_rate = optimal_rate
+
+        # The used card can out-earn the modeled optimal (uncapped base
+        # rate vs a capped-out strategy row). Optimal is a floor — never
+        # below actual — so per-txn "miles lost" can't go negative.
+        if actual_rate > optimal_rate:
+            optimal_id = actual_card_id
+            optimal_rate = actual_rate
+
+        # Min-spend priority, mirrored from the steer nudge: with ≤5 days
+        # of the month left and the used card still short of its
+        # calendar-month min spend, the routing was ENDORSED at runtime
+        # ("min_spend_priority" — the money is going where it's needed).
+        # The month-end scorecard must not scold what the live layer
+        # deliberately blessed.
+        if (actual_card is not None and optimal_rate > actual_rate
+                and _as_float(actual_card.get("min_spend_bonus")) > 0):
+            try:
+                d = datetime.strptime(date_str, "%Y-%m-%d").date()
+                days_left = monthrange(d.year, d.month)[1] - d.day
+                if (days_left <= 5
+                        and cal_spent[actual_card_id]
+                        < _as_float(actual_card.get("min_spend_bonus"))):
+                    optimal_id = actual_card_id
+                    optimal_rate = actual_rate
+            except ValueError:
+                pass
+        if actual_card is not None:
+            cal_spent[actual_card_id] += amount
 
         miles_for_txn_actual = amount * actual_rate
         miles_for_txn_optimal = amount * optimal_rate
@@ -797,7 +927,7 @@ def review_card_efficiency(month: str | None = None) -> dict:
             suboptimal.append({
                 "txn_id": txn_id,
                 "date": date_str,
-                "merchant": str(r.get("Merchant", "")),
+                "merchant": merchant,
                 "amount": amount,
                 "category": category,
                 "actual_card": actual_card_id,
@@ -807,12 +937,34 @@ def review_card_efficiency(month: str | None = None) -> dict:
                 "miles_lost": round(miles_for_txn_optimal - miles_for_txn_actual, 1),
             })
 
+    # Preformatted lines for the recap: the Jul 2026 message kept the
+    # tool's numbers but swapped a card NAME while paraphrasing — verbatim
+    # strings leave the model nothing to garble.
+    suboptimal.sort(key=lambda s: (-s["miles_lost"], s["date"]))
+
+    def _cname(cid: str) -> str:
+        return cards_by_id.get(cid, {}).get("display_name", cid)
+
+    top_missed_lines = [
+        (f"• {s['merchant']} (${s['amount']:.2f}) — used "
+         f"{_cname(s['actual_card'])}, should have been "
+         f"{_cname(s['optimal_card'])} (–{s['miles_lost']:.0f})")
+        for s in suboptimal[:5]
+    ]
+    summary_line = (
+        f"You earned {round(miles_actual):,} miles · optimal would have "
+        f"been {round(miles_optimal):,} · left on the table: "
+        f"{round(miles_optimal - miles_actual):,}"
+    )
+
     return {
         "status": "ok",
         "month": month,
         "miles_earned_actual": round(miles_actual, 1),
         "miles_earned_optimal": round(miles_optimal, 1),
         "miles_left_on_table": round(miles_optimal - miles_actual, 1),
+        "summary_line": summary_line,
+        "top_missed_lines": top_missed_lines,
         "transactions_suboptimal": suboptimal,
         "unmapped_payment_methods": unmapped_count,
     }
@@ -931,6 +1083,30 @@ _NOT_PARTNER_TAP_PATTERNS = ("SHENG SIONG", "FAIRPRICE", "NTUC", "WATSONS")
 # Above this, a charge on Vantage is treated as deliberate big-one-off
 # routing (uncapped 1.5 mpd beats overflowing a bonus cap) — no steer.
 _STEER_BIG_ONEOFF_FLOOR = 500.0
+
+# Earn rates for pattern-steered cards, mirroring the steer-nudge copy
+# ("4 mpd", yuu partner up to 18% ≈ 10 mpd when the month qualifies).
+# Kept next to the pattern tuples so the two stay in sync.
+_PATTERN_STEER_RATES = {"dbs-yuu": 10.0, "uob-pref": 4.0, "hsbc-revo": 4.0}
+
+
+def _pattern_optimal(merchant: str, cards_by_id: dict) -> str | None:
+    """The card the MERCHANT patterns dictate for the scorecard's optimal,
+    or None when the category strategy should stand. This is the same
+    knowledge the steer nudge uses, applied to review_card_efficiency so
+    the two can never contradict each other — Jul 2026: the nudge steered
+    a Grab ride to hsbc-revo online (4 mpd) while the scorecard claimed
+    dbs-yuu @10 for the same txn (Grab is not a yuu partner; on yuu it
+    earns base 0.25%). Precedence mirrors the nudge: yuu partner first,
+    known non-partner tap second, online-4mpd last."""
+    m_up = merchant.upper()
+    if any(p in m_up for p in _YUU_PARTNER_PATTERNS):
+        return "dbs-yuu" if "dbs-yuu" in cards_by_id else None
+    if any(p in m_up for p in _NOT_PARTNER_TAP_PATTERNS):
+        return "uob-pref" if "uob-pref" in cards_by_id else None
+    if any(p in m_up for p in _ONLINE_4MPD_PATTERNS):
+        return "hsbc-revo" if "hsbc-revo" in cards_by_id else None
+    return None
 
 
 def _calendar_month_spend(card: dict, month: str) -> float:

@@ -103,6 +103,65 @@ class TestCreateLoan:
         assert "YYYY-MM-DD" in result["message"]
 
 
+class TestCreateLoanRecategorise:
+    """create_loan with a linked txn recategorises it to Lending ITSELF.
+    The skill used to instruct a separate edit_expense step and the agent
+    skipped it (2026-08-01: the Shopee-for-Dad loan stayed in Groceries
+    while the reply claimed "(Lending)")."""
+
+    def test_linked_txn_recategorised_with_create_category(self):
+        from tools import loans
+        mock_db = MagicMock()
+        mock_db.insert_loan.return_value = _loan_rec()
+        mock_db.edit_transaction.return_value = {"status": "ok"}
+        with patch.object(loans, "supabase_client", mock_db):
+            result = loans.create_loan(person="Dad", amount=125.01,
+                                       txn_id="txn_20260801_003")
+        assert result["status"] == "created"
+        assert result["recategorised"] is True
+        assert "recategorise_error" not in result
+        mock_db.edit_transaction.assert_called_once_with(
+            merchant="", amount=0, txn_id="txn_20260801_003",
+            updates={"Category": "Lending"}, create_category=True,
+        )
+
+    def test_cash_loan_skips_recategorise(self):
+        from tools import loans
+        mock_db = MagicMock()
+        mock_db.insert_loan.return_value = _loan_rec(txn_id="")
+        with patch.object(loans, "supabase_client", mock_db):
+            result = loans.create_loan(person="Sarah", amount=50)
+        assert result["status"] == "created"
+        assert result["recategorised"] is False
+        assert "recategorise_error" not in result
+        mock_db.edit_transaction.assert_not_called()
+
+    def test_refused_edit_is_nonfatal_and_reported(self):
+        from tools import loans
+        mock_db = MagicMock()
+        mock_db.insert_loan.return_value = _loan_rec()
+        mock_db.edit_transaction.return_value = {
+            "status": "error", "message": "Transaction not found: txn_x"}
+        with patch.object(loans, "supabase_client", mock_db):
+            result = loans.create_loan(person="Dad", amount=125.01,
+                                       txn_id="txn_x")
+        assert result["status"] == "created"          # the loan survives
+        assert result["recategorised"] is False
+        assert "not found" in result["recategorise_error"]
+
+    def test_edit_exception_is_swallowed(self):
+        from tools import loans
+        mock_db = MagicMock()
+        mock_db.insert_loan.return_value = _loan_rec()
+        mock_db.edit_transaction.side_effect = RuntimeError("supabase 503")
+        with patch.object(loans, "supabase_client", mock_db):
+            result = loans.create_loan(person="Dad", amount=125.01,
+                                       txn_id="txn_20260801_003")
+        assert result["status"] == "created"
+        assert result["recategorised"] is False
+        assert "503" in result["recategorise_error"]
+
+
 class TestListOpenLoans:
     def test_lists_with_total(self):
         from tools import loans

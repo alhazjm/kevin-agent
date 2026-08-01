@@ -387,6 +387,118 @@ class TestSpendingSummary:
             summary = supabase_client.get_spending_summary("2026-07")
         assert summary["Mystery"]["note"] == "No budget set for this category"
 
+    def test_backfill_and_youtrip_spends_excluded(self):
+        from tools import supabase_client
+        txns = [
+            _txn_rec(id=1, category="Groceries", amount=30.0),
+            _txn_rec(id=2, category="Groceries", amount=500.0,
+                     source="backfill"),
+            _txn_rec(id=3, category="Travel - JB", amount=6.95,
+                     payment_method="YouTrip Card"),
+        ]
+        with patch.object(supabase_client, "_request") as req:
+            req.side_effect = [
+                (200, txns),                                        # read_transactions
+                (200, [{"category": "Groceries", "month": "2026-07",
+                        "limit_amount": 500}]),                     # read_budgets
+            ]
+            summary = supabase_client.get_spending_summary("2026-07")
+        assert summary["Groceries"]["spent"] == 30.0
+        assert "Travel - JB" not in summary
+
+
+class TestReportExclusions:
+    """generate_spending_report skips backfill imports and pot-internal
+    YouTrip spends (M14 + the pot rule) and SAYS what it skipped via
+    excluded_from_totals — the Jul 2026 recap silently ignored $667 of
+    pending rows while silently counting a $6.95 YouTrip spend the
+    dashboard excluded."""
+
+    def _run(self, txns, prev=None, trips=None):
+        from tools import supabase_client
+        with patch.object(supabase_client, "_request") as req:
+            req.side_effect = [
+                (200, txns),                                        # read_transactions (month)
+                (200, [{"category": "Groceries", "month": "2026-07",
+                        "limit_amount": 500}]),                     # read_budgets
+                (200, prev or []),                                  # read_transactions (prev month)
+                (200, trips or []),                                 # read_travel_mode_records
+            ]
+            return supabase_client.generate_spending_report("2026-07")
+
+    def _july(self):
+        return [
+            _txn_rec(id=1, category="Groceries", amount=30.0,
+                     merchant="NTUC"),
+            _txn_rec(id=2, category="UNCATEGORIZED", amount=99.0,
+                     merchant="MYSTERY SHOP"),
+            _txn_rec(id=3, category="Groceries", amount=500.0,
+                     source="backfill", merchant="STATEMENT IMPORT"),
+            _txn_rec(id=4, category="Travel - JB", amount=6.95,
+                     payment_method="YouTrip Card", merchant="SHENG SIONG"),
+        ]
+
+    def test_total_counts_only_clean_rows(self):
+        report = self._run(self._july())
+        assert report["total_spent"] == 30.0
+
+    def test_excluded_from_totals_telemetry(self):
+        report = self._run(self._july())
+        excl = report["excluded_from_totals"]
+        assert excl["pending_count"] == 1
+        assert excl["pending_total"] == 99.0
+        assert excl["backfill_count"] == 1
+        assert excl["backfill_total"] == 500.0
+        assert excl["youtrip_spend_count"] == 1
+        assert excl["youtrip_spend_total"] == 6.95
+        assert report["pending_review"]["total"] == 99.0
+
+    def test_merchants_and_daily_share_the_filter(self):
+        report = self._run(self._july())
+        merchants = {m["merchant"] for m in report["top_merchants"]}
+        assert merchants == {"NTUC"}
+        assert report["daily_spending"] == [
+            {"date": "2026-07-28", "total": 30.0}]
+
+    def test_mom_filters_both_sides(self):
+        prev = [
+            _txn_rec(id=10, category="Groceries", amount=100.0,
+                     date="2026-06-15"),
+            _txn_rec(id=11, category="Groceries", amount=1000.0,
+                     date="2026-06-16", source="backfill"),
+        ]
+        report = self._run(self._july(), prev=prev)
+        assert report["month_over_month"]["previous_total"] == 100.0
+        assert report["month_over_month"]["current_total"] == 30.0
+
+    def test_tagged_topup_rebuckets_into_trip_category(self):
+        # Adversarial-review catch: excluding pot-internal YouTrip spends
+        # zeroed the trip's budgets row. PWA parity: the [trip:]-tagged
+        # top-up consumes the TRIP category (funded amount), keeping
+        # budget-manager warnings armed while pot spends stay excluded.
+        txns = [
+            _txn_rec(id=1, category="YouTrip Top-up", amount=300.0,
+                     merchant="YOU TECHNOLOGIES",
+                     notes="[trip:JB 2026-08] orig: SGD 300"),
+            _txn_rec(id=2, category="Travel - JB", amount=280.0,
+                     payment_method="YouTrip Card",
+                     merchant="SHENG SIONG JB"),
+        ]
+        trips = [{"label": "JB 2026-08", "trip_category": "Travel - JB"}]
+        report = self._run(txns, trips=trips)
+        cats = {c["category"]: c for c in report["categories"]}
+        assert cats["Travel - JB"]["spent"] == 300.0     # the funded pot
+        assert "YouTrip Top-up" not in cats
+        assert report["excluded_from_totals"]["youtrip_spend_total"] == 280.0
+
+    def test_untagged_topup_stays_in_its_own_category(self):
+        txns = [_txn_rec(id=1, category="YouTrip Top-up", amount=150.0,
+                         merchant="YOU TECHNOLOGIES", notes="")]
+        report = self._run(
+            txns, trips=[{"label": "JB", "trip_category": "Travel - JB"}])
+        cats = {c["category"]: c for c in report["categories"]}
+        assert cats["YouTrip Top-up"]["spent"] == 150.0
+
 
 class TestMerchantMap:
     def test_longest_pattern_wins(self):

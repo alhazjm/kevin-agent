@@ -1032,3 +1032,289 @@ class TestMaybeSendSteerNudge:
         assert result["sent"] is True
         assert result["steer_to"] == "uob-pref"
         assert "tap UOB Preferred Visa" in mock_send.call_args[0][0]
+
+
+# --- review_card_efficiency (the month-end scorecard) ---
+
+def _scorecard_cards():
+    return [
+        {"card_id": "dbs-yuu", "display_name": "DBS Yuu Visa",
+         "payment_method_pattern": "dbs/posb card ending 1234",
+         "cycle_start_day": 24, "min_spend_bonus": 0.0, "bonus_cap": 0.0,
+         "base_mpd": 0.1, "notes": ""},
+        {"card_id": "uob-pref", "display_name": "UOB Preferred Visa",
+         "payment_method_pattern": "uob card ending 5678",
+         "cycle_start_day": 13, "min_spend_bonus": 0.0, "bonus_cap": 600.0,
+         "base_mpd": 0.4, "notes": ""},
+        {"card_id": "hsbc-revo", "display_name": "HSBC Revolution Visa",
+         "payment_method_pattern": "hsbc card ending 1357",
+         "cycle_start_day": 20, "min_spend_bonus": 0.0, "bonus_cap": 1000.0,
+         "base_mpd": 0.4, "notes": ""},
+        {"card_id": "dbs-vantage", "display_name": "DBS Vantage Visa",
+         "payment_method_pattern": "vantage",
+         "cycle_start_day": 23, "min_spend_bonus": 0.0, "bonus_cap": 0.0,
+         "base_mpd": 1.5, "notes": ""},
+    ]
+
+
+def _scorecard_strats():
+    return [
+        {"category": "Personal - Travel", "primary_card_id": "dbs-yuu",
+         "primary_earn_rate": 10.0, "primary_cap": 823.0,
+         "fallback_card_id": "", "fallback_earn_rate": 0.0,
+         "promo_active_until": "", "notes": ""},
+        {"category": "Insurance", "primary_card_id": "hsbc-revo",
+         "primary_earn_rate": 1.0, "primary_cap": 1000.0,
+         "fallback_card_id": "", "fallback_earn_rate": 0.0,
+         "promo_active_until": "", "notes": ""},
+        {"category": "_default", "primary_card_id": "uob-pref",
+         "primary_earn_rate": 4.0, "primary_cap": 600.0,
+         "fallback_card_id": "", "fallback_earn_rate": 0.0,
+         "promo_active_until": "", "notes": ""},
+    ]
+
+
+def _sc_txn(**over):
+    txn = {"Date": "2026-07-10", "Merchant": "SOMEWHERE", "Amount": 10.0,
+           "Category": "Personal - Travel", "Source": "email",
+           "Payment Method": "DBS Vantage Visa", "txn_id": "txn_20260710_001"}
+    txn.update(over)
+    return txn
+
+
+class TestReviewCardEfficiency:
+    """The Jul 2026 scorecard audit: category strategies are too coarse
+    (Grab scored as dbs-yuu @10 when it isn't a yuu partner) and
+    off-strategy cards scored 0 mpd (Vantage's flat 1.5 is real miles) —
+    both inflated 'miles left on the table'."""
+
+    def _run(self, txns, cards=None):
+        from tools import card_optimiser
+        with patch.object(card_optimiser, "_check_setup", return_value=None), \
+             patch.object(card_optimiser, "read_cards",
+                          return_value=cards or _scorecard_cards()), \
+             patch.object(card_optimiser, "read_card_strategy",
+                          return_value=_scorecard_strats()), \
+             patch.object(card_optimiser, "supabase_client") as mock_db:
+            mock_db.read_transactions.return_value = txns
+            return card_optimiser.review_card_efficiency("2026-07")
+
+    def test_grab_overridden_to_online_card_not_yuu(self):
+        # Grab matches _ONLINE_4MPD_PATTERNS, NOT the yuu partners — the
+        # steer nudge already knew this; the scorecard now agrees.
+        result = self._run([_sc_txn(Merchant="Grab* A-9LHWK6", Amount=31.70)])
+        (sub,) = result["transactions_suboptimal"]
+        assert sub["optimal_card"] == "hsbc-revo"
+        assert sub["optimal_earn_rate"] == 4.0
+        assert sub["actual_earn_rate"] == 1.5      # Vantage base, not 0
+        # 31.70 × (4 − 1.5) ≈ 79.25 — tolerance, not equality: the code
+        # computes a*4 − a*1.5, which is not bit-identical to a*2.5
+        assert abs(sub["miles_lost"] - 79.25) < 0.06
+
+    def test_yuu_partner_keeps_category_primary(self):
+        result = self._run([_sc_txn(Merchant="Gopay-Gojek", Amount=33.50)])
+        (sub,) = result["transactions_suboptimal"]
+        assert sub["optimal_card"] == "dbs-yuu"
+        assert sub["optimal_earn_rate"] == 10.0
+        assert abs(sub["miles_lost"] - 284.75) < 0.06
+
+    def test_not_partner_tap_on_recommended_card_loses_nothing(self):
+        # WATSONS in a yuu-primary category, tapped on uob-pref — exactly
+        # what the steer nudge recommends. Zero miles lost.
+        result = self._run([_sc_txn(Merchant="WATSONS - THE STAR VISTA",
+                                    Amount=40.65,
+                                    **{"Payment Method": "UOB Card ending 5678"})])
+        assert result["transactions_suboptimal"] == []
+        assert result["miles_left_on_table"] == 0.0
+
+    def test_optimal_is_floored_at_actual(self):
+        # Vantage base 1.5 beats the Insurance row's 1.0 — the model must
+        # not report negative loss (nor punish the better card).
+        result = self._run([_sc_txn(Merchant="INCOME INSURANCE",
+                                    Category="Insurance", Amount=141.32)])
+        assert result["transactions_suboptimal"] == []
+        assert result["miles_left_on_table"] == 0.0
+        assert result["miles_earned_actual"] == round(141.32 * 1.5, 1)
+
+    def test_pot_internal_rows_skipped_not_unmapped(self):
+        result = self._run([_sc_txn(Merchant="SHENG SIONG", Amount=6.95,
+                                    **{"Payment Method": "YouTrip Card"})])
+        assert result["unmapped_payment_methods"] == 0
+        assert result["miles_earned_optimal"] == 0.0
+
+    def test_verbatim_lines_use_display_names(self):
+        result = self._run([_sc_txn(Merchant="Grab* A-9LHWK6", Amount=31.70)])
+        (line,) = result["top_missed_lines"]
+        assert "used DBS Vantage Visa" in line
+        assert "should have been HSBC Revolution Visa" in line
+        assert "Grab* A-9LHWK6 ($31.70)" in line
+        assert "miles" in result["summary_line"]
+
+    def test_suboptimal_sorted_by_miles_lost_desc(self):
+        result = self._run([
+            _sc_txn(Merchant="Grab* SMALL", Amount=10.0,
+                    txn_id="txn_20260710_001"),
+            _sc_txn(Merchant="Grab* BIG", Amount=100.0,
+                    txn_id="txn_20260710_002"),
+        ])
+        lost = [s["miles_lost"] for s in result["transactions_suboptimal"]]
+        assert lost == sorted(lost, reverse=True)
+
+    def test_nonpartner_on_yuu_card_reports_the_trap(self):
+        # Adversarial-review catch (high): Grab paid ON the yuu card was
+        # credited yuu @10 by the strategy row, and the floor then lifted
+        # optimal back onto those phantom miles — zero loss reported for
+        # the exact 0.25%-trap the scorecard exists to catch.
+        result = self._run([_sc_txn(
+            Merchant="Grab* A-9LHWK6", Amount=31.70,
+            **{"Payment Method": "DBS/POSB card ending 1234"})])
+        (sub,) = result["transactions_suboptimal"]
+        assert sub["actual_card"] == "dbs-yuu"
+        assert sub["actual_earn_rate"] == 0.1      # yuu base, not @10
+        assert sub["optimal_card"] == "hsbc-revo"
+        assert abs(sub["miles_lost"] - 123.63) < 0.1
+
+    def test_unknown_merchant_on_yuu_primary_gets_benefit_of_doubt(self):
+        # No pattern knows this merchant — the strategy row stands and
+        # yuu-on-yuu reports no loss (pre-existing behavior preserved).
+        result = self._run([_sc_txn(
+            Merchant="SOME KOPITIAM", Amount=20.0,
+            **{"Payment Method": "DBS/POSB card ending 1234"})])
+        assert result["transactions_suboptimal"] == []
+
+    def test_steered_optimal_bounded_by_bonus_cap(self):
+        # Adversarial-review catch: the pattern-steered optimal awarded
+        # unlimited 4 mpd volume on a $600 bonus pool. Third $400 WATSONS
+        # txn exceeds uob-pref's modeled pool -> base rate -> floored by
+        # Vantage's 1.5 -> no loss entry.
+        txns = [
+            _sc_txn(Merchant="WATSONS ONE", Amount=400.0,
+                    txn_id="txn_20260710_001"),
+            _sc_txn(Merchant="WATSONS TWO", Amount=400.0, Date="2026-07-11",
+                    txn_id="txn_20260711_001"),
+            _sc_txn(Merchant="WATSONS TRE", Amount=400.0, Date="2026-07-12",
+                    txn_id="txn_20260712_001"),
+        ]
+        result = self._run(txns)
+        subs = result["transactions_suboptimal"]
+        assert len(subs) == 2
+        assert all(s["optimal_earn_rate"] == 4.0 for s in subs)
+        assert {s["txn_id"] for s in subs} == {
+            "txn_20260710_001", "txn_20260711_001"}
+
+    def test_min_spend_endorsement_suppresses_loss(self):
+        # Adversarial-review catch: the nudge deliberately blesses routing
+        # onto a card still short of its min spend with <=5 days left
+        # ("min_spend_priority") — the scorecard must not scold it.
+        cards = _scorecard_cards()
+        for c in cards:
+            if c["card_id"] == "dbs-yuu":
+                c["min_spend_bonus"] = 800.0
+        txn = _sc_txn(Merchant="FAIRPRICE FINEST", Amount=50.0,
+                      Category="Groceries", Date="2026-07-28",
+                      **{"Payment Method": "DBS/POSB card ending 1234"})
+        result = self._run([txn], cards=cards)
+        assert result["transactions_suboptimal"] == []
+        assert result["miles_left_on_table"] == 0.0
+
+    def test_min_spend_endorsement_needs_month_end_window(self):
+        # Same txn mid-month: no endorsement — the loss is real.
+        cards = _scorecard_cards()
+        for c in cards:
+            if c["card_id"] == "dbs-yuu":
+                c["min_spend_bonus"] = 800.0
+        txn = _sc_txn(Merchant="FAIRPRICE FINEST", Amount=50.0,
+                      Category="Groceries", Date="2026-07-10",
+                      **{"Payment Method": "DBS/POSB card ending 1234"})
+        result = self._run([txn], cards=cards)
+        (sub,) = result["transactions_suboptimal"]
+        assert sub["optimal_card"] == "uob-pref"
+        assert sub["actual_earn_rate"] == 0.1
+
+
+class TestPlanMonthLines:
+    """plan_lines collapse rows identical to _default — the Jul 2026 recap
+    printed 14 near-identical UOB Preferred lines."""
+
+    def _run(self, strats):
+        from tools import card_optimiser
+        with patch.object(card_optimiser, "_check_setup", return_value=None), \
+             patch.object(card_optimiser, "_lazy_revert_expired_promos",
+                          return_value=[]), \
+             patch.object(card_optimiser, "read_cards",
+                          return_value=_scorecard_cards()), \
+             patch.object(card_optimiser, "read_card_strategy",
+                          return_value=strats), \
+             patch.object(card_optimiser, "_spend_in_cycle",
+                          return_value=0.0):
+            return card_optimiser.plan_month()
+
+    def test_default_matching_rows_collapse(self):
+        strats = [
+            {"category": "Groceries", "primary_card_id": "uob-pref",
+             "primary_earn_rate": 4.0, "primary_cap": 600.0,
+             "fallback_card_id": "", "fallback_earn_rate": 0.0,
+             "promo_active_until": ""},
+            {"category": "Personal - Travel", "primary_card_id": "dbs-yuu",
+             "primary_earn_rate": 10.0, "primary_cap": 823.0,
+             "fallback_card_id": "", "fallback_earn_rate": 0.0,
+             "promo_active_until": ""},
+            {"category": "_default", "primary_card_id": "uob-pref",
+             "primary_earn_rate": 4.0, "primary_cap": 600.0,
+             "fallback_card_id": "", "fallback_earn_rate": 0.0,
+             "promo_active_until": ""},
+        ]
+        result = self._run(strats)
+        assert result["plan_lines"] == [
+            "- Personal - Travel → DBS Yuu Visa @10 mpd, cap $823",
+            "- Everything else → UOB Preferred Visa @4 mpd, cap $600",
+        ]
+
+    def test_promo_suffix_and_uncapped(self):
+        strats = [
+            {"category": "Dining", "primary_card_id": "dbs-vantage",
+             "primary_earn_rate": 1.5, "primary_cap": 0.0,
+             "fallback_card_id": "", "fallback_earn_rate": 0.0,
+             "promo_active_until": "2026-08-31"},
+            {"category": "_default", "primary_card_id": "uob-pref",
+             "primary_earn_rate": 4.0, "primary_cap": 600.0,
+             "fallback_card_id": "", "fallback_earn_rate": 0.0,
+             "promo_active_until": ""},
+        ]
+        result = self._run(strats)
+        assert result["plan_lines"][0] == (
+            "- Dining → DBS Vantage Visa @1.5 mpd, uncapped "
+            "(promo until 2026-08-31)")
+
+    def test_full_plan_still_returned(self):
+        strats = [
+            {"category": "_default", "primary_card_id": "uob-pref",
+             "primary_earn_rate": 4.0, "primary_cap": 600.0,
+             "fallback_card_id": "", "fallback_earn_rate": 0.0,
+             "promo_active_until": ""},
+        ]
+        result = self._run(strats)
+        assert len(result["plan"]) == 1
+        assert result["plan_lines"] == [
+            "- Everything else → UOB Preferred Visa @4 mpd, cap $600"]
+
+
+class TestReadCardsBaseMpd:
+    def test_base_mpd_defaults_to_zero_pre_migration(self):
+        from tools import card_optimiser
+        with patch.object(card_optimiser, "supabase_client") as mock_db:
+            mock_db.read_cards_records.return_value = [
+                {"card_id": "dbs-vantage", "display_name": "DBS Vantage",
+                 "payment_method_pattern": "vantage", "cycle_start_day": 23}]
+            cards = card_optimiser.read_cards()
+        assert cards[0]["base_mpd"] == 0.0
+
+    def test_base_mpd_read_when_present(self):
+        from tools import card_optimiser
+        with patch.object(card_optimiser, "supabase_client") as mock_db:
+            mock_db.read_cards_records.return_value = [
+                {"card_id": "dbs-vantage", "display_name": "DBS Vantage",
+                 "payment_method_pattern": "vantage", "cycle_start_day": 23,
+                 "base_mpd": "1.5"}]
+            cards = card_optimiser.read_cards()
+        assert cards[0]["base_mpd"] == 1.5
