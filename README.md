@@ -21,6 +21,36 @@ Bank-alert emails are parsed within ~5 minutes of a purchase and land in the led
 
 And **Kevin**, a single-file PWA dashboard, shows the read-side at a glance: left-to-spend pace, budget meters, per-card statement-cycle and bonus-cap meters, trip pots, open IOUs, detected subscriptions, and a receipt-styled transaction tape. Open [`pwa/index.html`](pwa/index.html) straight from disk to see it with sample data — no setup needed.
 
+### How one purchase becomes a row
+
+Roughly five minutes, most of it Gmail's polling interval. The ordering matters more than the boxes: the audit row is written *before* the webhook fires, the dedup can stop the flow dead, and the confirmation is sent by the tool rather than the model.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Bank
+    participant G as Gmail + Apps Script
+    participant K as Kevin
+    participant DB as Supabase
+    participant T as Telegram
+
+    B->>G: transaction alert email
+    Note over G: regex parse per bank<br/>FX-convert to SGD if foreign
+    G->>DB: audit row into webhook_log
+    Note over G,DB: written BEFORE the send — emails are<br/>marked read and there is no retry
+    G->>K: HMAC-signed POST /webhooks/expense-ingest
+    K->>DB: merchant_map lookup · active trip?
+    Note over K: learned mapping → travel mode<br/>→ LLM judgment, in that order
+    K->>DB: insert, on_conflict=idempotency_key
+    DB-->>K: txn_id — or "duplicate", and the flow stops here
+    K->>T: confirmation bubble
+    Note over K,T: the TOOL sends this, then returns<br/>assistant_reply_required:false so the agent<br/>loop exits — you get exactly one message
+    T->>K: "that's transport, not food"
+    K->>DB: edit the row, learn the mapping
+```
+
+A weekly sweep diffs `webhook_log` against the ledger, so anything that fell out between steps 3 and 8 gets reported rather than lost.
+
 ---
 
 ## The build, in four eras
