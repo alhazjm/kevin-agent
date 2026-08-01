@@ -2,7 +2,7 @@
 
 Bank emails → Gmail webhook → tool-calling LLM agent → Postgres ledger → Telegram replies + a receipt-styled PWA dashboard. A personal-finance agent built for the Singapore context (DBS/UOB/HSBC email shapes, SGD, the local card-rewards game), deployed on a $7/mo Render box.
 
-This is the production code I run daily, scrubbed of personal data: **37 tools · 4 versioned skills · 578 tests**. Sample identifiers (card numbers, merchants, emails) are fictional; the personal memory files ship as `.example` templates. Clone it, configure it to your banks, and it's yours — [**docs/SETUP.md**](docs/SETUP.md) is the runbook.
+This is the production code I run daily, scrubbed of personal data: **37 tools · 4 versioned skills · 587 tests**. Sample identifiers (card numbers, merchants, emails) are fictional; the personal memory files ship as `.example` templates. Clone it, configure it to your banks, and it's yours — [**docs/SETUP.md**](docs/SETUP.md) is the runbook.
 
 ---
 
@@ -211,7 +211,7 @@ A different species: workflows in [`.claude/skills/`](.claude/skills/) run by a 
 | Ingress | Telegram bot + Gmail Apps Script (HMAC-signed webhook, audit-before-send) |
 | Egress | Telegram + 7 cron schedules (SGT wall-clock) |
 | Deploy | Docker on Render (Singapore), ~$7/mo all-in |
-| Tests | pytest — 578 tests, ~1s, no network |
+| Tests | pytest — 587 tests, ~1s, no network |
 
 ---
 
@@ -221,14 +221,17 @@ A different species: workflows in [`.claude/skills/`](.claude/skills/) run by a 
 
 The one architectural fact that makes self-hosting sane: **every credential stays in accounts you own** — your Gmail runs the Apps Script (your own script on your own mailbox needs no OAuth app verification), your Supabase holds the data, your Render runs the agent, your bot talks to you. There is no service in the middle, and nothing here phones home.
 
-The shape of it, so you know what you're signing up for:
+You need four accounts: **Supabase, Telegram, OpenAI, Render.** That's it — Google Cloud and a spreadsheet are an optional backup, not a dependency.
 
-1. **Supabase** — free project; put your email in `is_owner()`, run the six migrations by hand.
-2. **Render** — deploy the Dockerfile as a web service with a 1 GB disk; nine env vars.
+1. **Supabase** — free project; put your email in `is_owner()`, then paste [`supabase/schema.sql`](supabase/schema.sql) into the SQL editor once. One paste, not seven files.
+2. **Render** — deploy the Dockerfile as a web service with a 1 GB disk and seven env vars.
 3. **The PWA** — paste your project URL + publishable key into two files, publish `pwa/` as a static site.
-4. **Apps Script** — paste [`Code.gs`](apps-script/Code.gs) into a script on *your* Google account, set Script Properties, run `setupTrigger()`.
-5. **Your banks** — the parsers are regexes for DBS/UOB/HSBC layouts. A different bank means a new parser *and* its Python mirror in [`tests/test_email_parser.py`](tests/test_email_parser.py), changed together — the test file is the executable spec, and `testIdempotencyKeyParity()` verifies the dedup key still matches Python before you trust it with real money.
+4. **Apps Script** — paste [`Code.gs`](apps-script/Code.gs) into a script on *your* Google account, set Script Properties, run `setupTrigger()`. This needs no Google Cloud project — an Apps Script reads your own mail under your own consent. Skip it entirely and log by chat instead.
+5. **Your banks** — the parsers are regexes for specific alert layouts. A different bank means a new parser *and* its Python mirror in [`tests/test_email_parser.py`](tests/test_email_parser.py), changed together — the test file is the executable spec, and `testIdempotencyKeyParity()` verifies the dedup key still matches Python before you trust it with real money.
 6. **Optional: card optimiser** — insert your cards' earn rates, caps, and cycle start days. Until then every card tool politely returns `setup_required`.
+7. **Optional: the Sheet backup** — a Google Cloud service account and a spreadsheet buy you a human-browsable copy rebuilt nightly. Leave it out and the two export tools stay quiet.
+
+Swapping the defaults: the **model** is a `base_url` edit away from any OpenAI-compatible provider, the **host** is any Docker runner with a persistent disk, and the **chat platform** is the one genuinely wired-in piece — see [Swapping the pieces](docs/SETUP.md#swapping-the-pieces) for the honest cost of each.
 
 ### What isn't in this repo
 
@@ -240,7 +243,7 @@ The deployed instance also carries card-strategy research — issuer T&C extract
 
 ```bash
 pip install pytest gspread google-auth cffi
-pytest tests/ -q        # 578 tests, ~1s, no network
+pytest tests/ -q        # 587 tests, ~1s, no network
 ```
 
 `cffi` is a hidden hard dependency — without it pytest dies at collection with `pyo3_runtime.PanicException`. `conftest.py` stubs the framework-injected tool registry, so the suite runs without hermes-agent installed.

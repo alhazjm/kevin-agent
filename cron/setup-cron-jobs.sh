@@ -56,7 +56,7 @@ echo "Created: Sunday 10 PM weekly sweep for missed transactions"
 # 3 AM daily - rebuild the Google Sheet from Supabase (the ledger of
 # record). The Sheet is a read-only human view + the free-tier backup copy;
 # this replaced the dual-write mirror (migration PR 4). Silent on success.
-hermes cron create     "0 3 * * *"     "Silently call export_sheet_backup. If status is ok, produce an EMPTY response and do NOT message me - skip send_message entirely. If it returns status='error', send exactly one short line: 'Nightly sheet export failed: <message>'."     --skill expense-tracker     --deliver telegram
+hermes cron create     "0 3 * * *"     "Silently call export_sheet_backup. If status is ok, produce an EMPTY response and do NOT message me - skip send_message entirely. If status is 'setup_required' the Sheet backup is simply not configured, which is a supported setup - also produce an EMPTY response and say NOTHING. If it returns status='error', send exactly one short line: 'Nightly sheet export failed: <message>'."     --skill expense-tracker     --deliver telegram
 echo "Created: 3 AM nightly Sheet export from Supabase"
 
 # 07:00 every Jan 1 - freeze the year that just ended into an immutable

@@ -123,7 +123,7 @@ recon/                         # Local statement-recon CLI (pypdf, checksum-gate
 scripts/                       # Local/ops helpers (one-time Supabase backfill, LLM-usage summariser)
 samples/                       # GITIGNORED — real e-statement PDFs live here, never committed
 sheets-template/README.md      # LEGACY sheet-era schema doc — kept for the export tab layout only
-tests/                         # 578 tests across 8 files; see "Testing"
+tests/                         # 587 tests across 9 files; see "Testing"
 conftest.py                    # Repo root; sys.path fix + stubs tools.registry (framework-injected at runtime)
 ROADMAP.md                     # Strategic direction + "Things NOT to do" — read before proposing features
 ```
@@ -372,8 +372,27 @@ registry.register(
 Card/travel/loans handlers lazy-import their module inside the handler
 (`from tools import card_optimiser`) — see M10. Also list the tool in the
 module docstring at the top of `expense_sheets_tool.py`. `_sheets_configured`
-(the universal `check_fn`, name kept from the sheet era) now gates on BOTH
-backends: gspread env vars AND `supabase_client._configured()`.
+(the universal `check_fn`, name kept from the sheet era) gates on Supabase
+alone — see the divergence note below.
+
+> **DELIBERATE DIVERGENCE from the private deployment repo — do not "fix".**
+> Upstream, `_sheets_configured()` also requires `GSPREAD_SPREADSHEET_ID` and
+> `GOOGLE_SERVICE_ACCOUNT_JSON`. That was correct during the migration
+> window, when the Sheet still powered the mutation mirror, the WebhookLog
+> sweep and the card/travel hooks. All three moved to Postgres and the gate
+> was never relaxed, so a fresh install had to stand up a Google Cloud
+> project, a service account and a spreadsheet before the agent could log
+> one expense — for a backup of data it did not have yet.
+>
+> Here the Sheet is optional: `_sheets_configured()` requires only Supabase,
+> and `_sheet_export_configured()` gates the two tools that actually write to
+> the Sheet (`export_sheet_backup`, `archive_year_snapshot`), which return
+> `setup_required` and stay silent when it is absent — the same contract the
+> card optimiser uses before its tables exist. `tests/test_sheets_optional.py`
+> pins both halves, and the export cron prompt treats `setup_required` as
+> silence.
+>
+> Expect a conflict here on every sync from upstream. Keep this side.
 
 ### Return-shape contracts (the skill layer branches on these)
 
@@ -714,12 +733,13 @@ pytest tests/ -k "idempotency"                # by keyword
 ```
 
 On Windows: `.venv-test/Scripts/python.exe -m pytest tests/ -q`.
-Current count: **578 passing** across eight files:
+Current count: **587 passing** across nine files:
 `test_expense_sheets_tool` (also covers `sheets_client`),
 `test_supabase_client`, `test_card_optimiser`, `test_travel_mode`,
 `test_loans`, `test_email_parser` (the Apps Script mirror, M16),
-`test_statement_recon`, and `test_schema_consolidation` (keeps
-`supabase/schema.sql` honest against the migrations). State the new total in every PR body.
+`test_statement_recon`, `test_schema_consolidation` (keeps
+`supabase/schema.sql` honest against the migrations), and
+`test_sheets_optional` (pins Sheets as optional, Supabase as required). State the new total in every PR body.
 
 ## Checklists
 

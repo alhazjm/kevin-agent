@@ -66,14 +66,43 @@ TOOLSET = "expense_tracker"
 
 
 def _sheets_configured() -> bool:
-    """Gate for every tool. Since the Supabase flip (migration PR 3) BOTH
-    backends must be configured: Supabase is the ledger of record; the
-    Sheet still powers the mutation mirror, the WebhookLog sweep (until
-    PR 4), and the card/travel hooks (until PR 3b ports them)."""
+    """Gate for every tool. Supabase is the ledger of record, so it is the
+    only hard requirement.
+
+    This used to demand the Google Sheets pair as well, which made sense
+    during the migration window when the Sheet still powered the mutation
+    mirror, the WebhookLog sweep and the card/travel hooks. All three of
+    those moved to Postgres, and the Sheet became a write-only nightly
+    backup — but the gate was never relaxed, so a new install had to stand
+    up a Google Cloud project, a service account and a spreadsheet before
+    the agent could log a single expense. Nothing read the Sheet by then.
+
+    Sheets config is now checked only by the two tools that actually write
+    to it (see `_sheet_export_configured`). The function keeps its old name
+    because it is the `check_fn` on all 37 registrations.
+    """
+    return supabase_client._configured()
+
+
+def _sheet_export_configured() -> bool:
+    """Extra gate for the two tools that write to the Google Sheet.
+
+    `export_sheet_backup` (nightly) and `archive_year_snapshot` (Jan 1).
+    Both are optional conveniences on top of the ledger, so an unconfigured
+    Sheet is a `setup_required` no-op rather than an error — same contract
+    the card optimiser uses before its tables exist.
+    """
     return bool(
         os.environ.get("GSPREAD_SPREADSHEET_ID")
         and os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-    ) and supabase_client._configured()
+    )
+
+
+_SHEET_EXPORT_SETUP_MSG = (
+    "Google Sheet backup is not configured — set GSPREAD_SPREADSHEET_ID and "
+    "GOOGLE_SERVICE_ACCOUNT_JSON to enable it. This is optional; the ledger "
+    "lives in Supabase and is unaffected."
+)
 
 
 
@@ -1954,6 +1983,11 @@ def _assemble_budget_grid(budget_rows: list[dict]) -> list[list]:
 
 
 def handle_export_sheet_backup(args: dict, **kwargs) -> str:
+    if not _sheet_export_configured():
+        return json.dumps({
+            "status": "setup_required",
+            "message": _SHEET_EXPORT_SETUP_MSG,
+        })
     try:
         txns = supabase_client.read_all_transaction_rows()
         budget_rows = supabase_client.read_all_budget_rows()
@@ -2022,6 +2056,11 @@ ARCHIVE_YEAR_SNAPSHOT_SCHEMA = {
 
 
 def handle_archive_year_snapshot(args: dict, **kwargs) -> str:
+    if not _sheet_export_configured():
+        return json.dumps({
+            "status": "setup_required",
+            "message": _SHEET_EXPORT_SETUP_MSG,
+        })
     try:
         # `or 0` first: the LLM sends "" / null for omitted params, and
         # int("") raises. 0 is falsy too, so both fall through to the
