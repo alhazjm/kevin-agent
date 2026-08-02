@@ -1,0 +1,23 @@
+{
+  "transactions": [
+    {"Date": "2026-04-01", "Merchant": "GrabFood", "Amount": 18.50, "Currency": "SGD", "Category": "Food & Dining", "Source": "email", "Notes": ""},
+    {"Date": "2026-04-02", "Merchant": "Shell", "Amount": 65.00, "Currency": "SGD", "Category": "Transport", "Source": "email", "Notes": ""},
+    {"Date": "2026-04-03", "Merchant": "FairPrice", "Amount": 42.30, "Currency": "SGD", "Category": "Groceries", "Source": "email", "Notes": ""},
+    {"Date": "2026-04-05", "Merchant": "Starbucks", "Amount": 8.90, "Currency": "SGD", "Category": "Food & Dining", "Source": "email", "Notes": ""},
+    {"Date": "2026-04-07", "Merchant": "Netflix", "Amount": 15.98, "Currency": "SGD", "Category": "Subscriptions", "Source": "email", "Notes": ""},
+    {"Date": "2026-04-08", "Merchant": "Grab", "Amount": 12.50, "Currency": "SGD", "Category": "Transport", "Source": "email", "Notes": ""},
+    {"Date": "2026-04-10", "Merchant": "Uniqlo", "Amount": 89.00, "Currency": "SGD", "Category": "Shopping", "Source": "manual", "Notes": "New work shirts"},
+    {"Date": "2026-04-12", "Merchant": "McDonald's", "Amount": 11.20, "Currency": "SGD", "Category": "Food & Dining", "Source": "email", "Notes": ""}
+  ],
+  "budgets": [
+    {"Category": "Food & Dining", "Monthly Limit": 800},
+    {"Category": "Transport", "Monthly Limit": 300},
+    {"Category": "Groceries", "Monthly Limit": 500},
+    {"Category": "Shopping", "Monthly Limit": 400},
+    {"Category": "Entertainment", "Monthly Limit": 200},
+    {"Category": "Subscriptions", "Monthly Limit": 150},
+    {"Category": "Utilities", "Monthly Limit": 200},
+    {"Category": "Health", "Monthly Limit": 150},
+    {"Category": "Miscellaneous", "Monthly Limit": 200}
+  ]
+}

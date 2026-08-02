@@ -1,0 +1,15 @@
+{
+  "categories": [
+    {"name": "Food & Dining", "monthly_limit": 800, "color": "#FF6B6B"},
+    {"name": "Transport", "monthly_limit": 300, "color": "#4ECDC4"},
+    {"name": "Groceries", "monthly_limit": 500, "color": "#45B7D1"},
+    {"name": "Shopping", "monthly_limit": 400, "color": "#96CEB4"},
+    {"name": "Entertainment", "monthly_limit": 200, "color": "#FFEAA7"},
+    {"name": "Subscriptions", "monthly_limit": 150, "color": "#DDA0DD"},
+    {"name": "Utilities", "monthly_limit": 200, "color": "#98D8C8"},
+    {"name": "Health", "monthly_limit": 150, "color": "#F7DC6F"},
+    {"name": "Miscellaneous", "monthly_limit": 200, "color": "#B0BEC5"}
+  ],
+  "currency": "SGD",
+  "total_monthly_budget": 2900
+}

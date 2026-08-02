@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: hermes-expense-tracker
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PEHD_LLM_USAGE_DIR
+        value: /data/llm_usage
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GSPREAD_SPREADSHEET_ID
+        sync: false
+      # Supabase is the ledger of record since the migration, and
+      # _sheets_configured() in tools/expense_sheets_tool.py gates EVERY tool
+      # on it being reachable. deploy/start.sh already exports both, but they
+      # were never declared here — so a Blueprint deploy came up as a bot that
+      # could chat and could not call a single tool.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: WEBHOOK_HMAC_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ALLOWED_USERS
+        sync: false
+    disk:
+      name: hermes-data
+      mountPath: /data
+      sizeGB: 1
