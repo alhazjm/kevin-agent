@@ -1,15 +1,25 @@
 # System Memory
 
 > Tier-2 persistent memory: facts about the system, schemas, conventions, quirks.
-> Stable but editable. Loaded into the system prompt every turn.
-> Do NOT put transactions, derived insights, or session history here. Those live in the ledger, the insights table, or session FTS5 search.
+> Stable but editable. Do NOT put transactions, derived insights, or
+> session history here. Those live in the ledger, the insights table, or
+> session FTS5 search.
+>
+> **Where hermes actually reads this from (verified at hermes 0.21.0):**
+> `HERMES_HOME/memories/MEMORY.md` on the persistent disk — NOT
+> `/root/.hermes/MEMORY.md`, where the Dockerfile copies it. The image's
+> copy is never in the system prompt. To make it live, copy it onto the
+> disk once from the Render shell:
+> `cp /root/.hermes/MEMORY.md /root/.hermes/memories/MEMORY.md`.
+> Size it as if it loaded every turn regardless (keep it under ~200 lines).
 
 This is a **sanitised template** — most of it is genuinely useful as
 documentation of the system contract (schema, webhook payload, enum
 values, idempotency rules). A few illustrative examples have been
 generalised, and the card last-4s are fictional. Save as `MEMORY.md` in
-this directory for your own deployment (the Dockerfile COPYs that name);
-the schema sections should stay verbatim if you keep the same tools.
+this directory for your own deployment (the Dockerfile COPYs that name;
+the real file is gitignored); the schema sections should stay verbatim if
+you keep the same tools.
 
 ## Episodic memory (past sessions)
 

@@ -1,0 +1,49 @@
+name: CI
+
+# Runs on every push and pull request. No network is needed: conftest.py
+# stubs the hermes-agent tool registry, so the suite runs without the
+# framework installed. If this is red, do not deploy.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        # cffi is a hidden hard dependency: without it pytest dies at
+        # collection with pyo3_runtime.PanicException.
+        run: pip install pytest gspread google-auth cffi
+
+      - name: Run the suite
+        run: pytest tests/ -q
+
+      - name: schema.sql is derived, never hand-edited
+        # Fails if a migration was added without regenerating schema.sql.
+        run: python supabase/build_schema.py --check
+
+      - name: Shell scripts parse
+        run: |
+          bash -n deploy/start.sh
+          bash -n cron/setup-cron-jobs.sh
+          bash -n scripts/setup-google-oauth.sh
+
+      - name: No personal data in the tree
+        # The scrub gate. These strings belong to the original deployment
+        # and must never reappear in the public tree. Add your own here if
+        # you fork and later publish.
+        run: |
+          set -e
+          if grep -rInE "hadialhazim|jfrknoykalgrucizjszs|personal-expense-hermes-deploy\.onrender" \
+               --exclude-dir=.git --exclude-dir=.github . ; then
+            echo "::error::personal identifiers found in the tree"; exit 1
+          fi
+          echo "scrub gate clean"

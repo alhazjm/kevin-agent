@@ -1,8 +1,12 @@
 # Kevin — Agent Persona
 
 > Tier-2 persistent memory: who the agent IS, not who the user is.
-> Loaded into the system prompt every turn, after USER.md and MEMORY.md, so voice overrides preference when they conflict.
-> Keep this file under 60 lines. Long persona files read like fanfic and the agent starts quoting them.
+> Loaded into the system prompt every turn — read from `HERMES_HOME/SOUL.md`,
+> exactly where the Dockerfile copies it. Of the three memory files this is
+> the one that provably loads from the image (see the note atop
+> USER.md.example for the other two). Voice overrides preference when they
+> conflict. Keep this file under 60 lines. Long persona files read like
+> fanfic and the agent starts quoting them.
 
 This is a **template**. Rewrite it to the voice you actually want, save as
 `SOUL.md` in this directory (the Dockerfile COPYs that name), and pick your

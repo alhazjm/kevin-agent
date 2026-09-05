@@ -1,0 +1,210 @@
+name: Upstream anchor check
+
+# Answers one question every week without anyone having to remember to ask
+# it: "if I bumped HERMES_AGENT_SHA to the newest hermes-agent release
+# today, would the build still work?"
+#
+# The two build-time patches in deploy/patches/ rewrite upstream source by
+# matching exact anchor strings, and hermes-config/cli-config.yaml relies on
+# a handful of upstream behaviours (the NO_REPLY silence marker, the
+# skill-bundles directory, the unknown-slash-command bouncer, per-platform
+# cron toolsets). This job downloads the files at the newest tag and tests
+# every one of those assumptions. It is REPORT-ONLY: it never edits the
+# pin. When everything passes, the report says the bump is safe; when
+# something drifted, it says exactly which check failed so you can follow
+# docs/UPGRADING-HERMES.md.
+#
+# The result is written to the job summary and to a single issue titled
+# "hermes-agent upstream: <tag>" that is created or updated in place.
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"   # Mondays 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Upstream tag or SHA to test (default: newest tag)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM: NousResearch/hermes-agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve the upstream ref
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          REF="${{ github.event.inputs.ref }}"
+          if [ -z "$REF" ]; then
+            REF=$(gh api "repos/$UPSTREAM/tags?per_page=1" --jq '.[0].name')
+          fi
+          SHA=$(gh api "repos/$UPSTREAM/commits/$REF" --jq '.sha')
+          PINNED=$(grep -oE '^ARG HERMES_AGENT_SHA=[0-9a-f]+' Dockerfile | cut -d= -f2)
+          echo "ref=$REF"       >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA"       >> "$GITHUB_OUTPUT"
+          echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
+          echo "Testing $REF ($SHA); Dockerfile pins $PINNED"
+
+      - name: Download the upstream files the deployment depends on
+        run: |
+          set -e
+          SHA="${{ steps.ref.outputs.sha }}"
+          mkdir -p up/agent up/gateway up/hermes_cli up/cron up/tools
+          fetch() {  # path -> up/path, 3 attempts (GitHub 429s under load)
+            for i in 1 2 3; do
+              curl -fsSL "https://raw.githubusercontent.com/$UPSTREAM/$SHA/$1" -o "up/$1" && return 0
+              sleep $((i*10))
+            done
+            echo "::error::could not download $1"; return 1
+          }
+          for f in agent/conversation_loop.py gateway/response_filters.py gateway/run.py \
+                   agent/skill_bundles.py cron/scheduler.py hermes_cli/config_defaults.py \
+                   pyproject.toml model_tools.py tools/registry.py; do
+            fetch "$f"
+          done
+
+      - name: Run every check
+        id: checks
+        run: |
+          set +e
+          PASS=0; FAIL=0; REPORT=""
+          ok()   { PASS=$((PASS+1)); REPORT="$REPORT\n- ✅ $1"; }
+          bad()  { FAIL=$((FAIL+1)); REPORT="$REPORT\n- ❌ $1"; }
+          count() { grep -cF -- "$2" "up/$1" 2>/dev/null || echo 0; }
+
+          # 1+2. The two patches apply to a pristine copy, exactly once each,
+          #      and the result still compiles.
+          cp up/agent/conversation_loop.py cl.py
+          if PEHD_PATCH_TARGET=cl.py python deploy/patches/suppress_reply_on_silent_tools.py >/dev/null 2>&1 \
+             && grep -q "PEHD patch v3: exit agent loop when tool signalled silence" cl.py; then
+            ok "silence patch (suppress_reply_on_silent_tools) applies"
+          else bad "silence patch anchor not found or ambiguous in agent/conversation_loop.py"; fi
+          if PEHD_PATCH_TARGET=cl.py python deploy/patches/log_llm_usage.py >/dev/null 2>&1 \
+             && grep -q "PEHD patch: persist per-call LLM usage to /data" cl.py; then
+            ok "usage patch (log_llm_usage) applies"
+          else bad "usage patch anchor not found or ambiguous in agent/conversation_loop.py"; fi
+          if python -c "import py_compile; py_compile.compile('cl.py', doraise=True)" 2>/dev/null; then
+            ok "patched conversation_loop.py compiles"
+          else bad "patched conversation_loop.py does NOT compile"; fi
+
+          # 3. The silence token the patch emits is still one upstream swallows.
+          if grep -q '"NO_REPLY",' up/gateway/response_filters.py \
+             && grep -q "def is_intentional_silence_response" up/gateway/response_filters.py \
+             && grep -q "def is_autonomous_silence_response" up/gateway/response_filters.py; then
+            ok "NO_REPLY still in LIVE_GATEWAY_SILENT_MARKERS with both matchers"
+          else bad "gateway/response_filters.py changed — the silence contract may be broken"; fi
+
+          # 4. Retry statuses are still buffered (why the retry-status patch was retired).
+          if [ "$(count agent/conversation_loop.py 'agent._buffer_status(f"⏳ Retrying')" -ge 1 ]; then
+            ok "retry statuses still buffered (_buffer_status)"
+          else bad "retry status path changed — check whether '⏳ Retrying' is emitted unbuffered again"; fi
+
+          # 5. Tool auto-discovery.
+          if grep -q "discover_builtin_tools" up/model_tools.py && grep -q "def discover_builtin_tools" up/tools/registry.py; then
+            ok "tool auto-discovery present (model_tools.py + tools/registry.py)"
+          else bad "discover_builtin_tools missing — custom tool registration may not load"; fi
+
+          # 6. Cron: per-platform toolsets, wrap_response, [SILENT] and the empty-response soft-fail.
+          if grep -q '_get_platform_tools(cfg or {}, "cron")' up/cron/scheduler.py \
+             && grep -q "wrap_response" up/cron/scheduler.py \
+             && grep -q 'SILENT_MARKER = "\[SILENT\]"' up/cron/scheduler.py; then
+            ok "cron resolves tools via platform_toolsets.cron, honours wrap_response, accepts [SILENT]"
+          else bad "cron/scheduler.py changed around toolset resolution / wrap_response / [SILENT]"; fi
+
+          # 7. Skill bundles + the unknown-slash-command bouncer (why the bundles exist).
+          if grep -q '"skill-bundles"' up/agent/skill_bundles.py \
+             && grep -q 'Unknown command `/{command}`' up/gateway/run.py \
+             && grep -q "resolve_bundle_command_key(command)" up/gateway/run.py; then
+            ok "skill bundles read from HERMES_HOME/skill-bundles and dispatched before the unknown-command notice"
+          else bad "bundle dispatch or the unknown-command block changed — /log /undo /budget /summary may break"; fi
+
+          # 8. Every auxiliary/background feature that is default-on upstream is one we disable.
+          python - <<'PY' > aux.txt
+          import re
+          L=open('up/hermes_cli/config_defaults.py',encoding='utf-8').read().splitlines()
+          out=[]; stack=[]
+          for l in L:
+              ind=len(l)-len(l.lstrip())
+              m=re.match(r'\s*"([^"]+)":\s*\{',l)
+              if m:
+                  while stack and stack[-1][0]>=ind: stack.pop()
+                  stack.append((ind,m.group(1)))
+              if re.match(r'\s*"enabled":\s*True',l):
+                  while stack and stack[-1][0]>=ind: stack.pop()
+                  out.append(".".join(k for _,k in stack))
+          print("\n".join(sorted(set(out))))
+          PY
+          KNOWN="agent.empty_response_guard auxiliary.background_review auxiliary.title_generation bedrock.discovery compression context.memory_trim curator curator.backup desktop.auto_continue lsp moa.presets.default model_catalog stt"
+          NEW=""
+          while read -r k; do
+            case " $KNOWN " in *" $k "*) ;; *) NEW="$NEW $k";; esac
+          done < aux.txt
+          if [ -z "$NEW" ]; then ok "no new default-on auxiliary feature (the five disables in cli-config.yaml are still complete)"
+          else bad "NEW default-on feature(s) upstream:$NEW — decide whether to disable them in cli-config.yaml"; fi
+
+          # 9. Extras the Dockerfile installs still exist.
+          if grep -qE '^messaging = ' up/pyproject.toml && grep -qE '^edge-tts = ' up/pyproject.toml && grep -qE '^all = ' up/pyproject.toml; then
+            ok "pyproject extras [all], [messaging], [edge-tts] still exist"
+          else bad "a pyproject extra the Dockerfile installs is gone"; fi
+
+          echo "pass=$PASS" >> "$GITHUB_OUTPUT"
+          echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
+          printf "%b\n" "$REPORT" > report.md
+          cat report.md
+
+      - name: Write the report
+        id: report
+        run: |
+          REF="${{ steps.ref.outputs.ref }}"; SHA="${{ steps.ref.outputs.sha }}"; PINNED="${{ steps.ref.outputs.pinned }}"
+          FAIL="${{ steps.checks.outputs.fail }}"; PASS="${{ steps.checks.outputs.pass }}"
+          {
+            echo "## hermes-agent upstream check — \`$REF\`"
+            echo
+            if [ "$SHA" = "$PINNED" ]; then
+              echo "Dockerfile already pins this commit (\`${PINNED:0:8}\`). Nothing to do."
+            elif [ "$FAIL" = "0" ]; then
+              echo "**Safe to bump.** All $PASS checks passed against \`${SHA:0:8}\`. Dockerfile currently pins \`${PINNED:0:8}\`."
+              echo
+              echo "Follow **docs/UPGRADING-HERMES.md** section 4: change \`ARG HERMES_AGENT_SHA\` to \`$SHA\`, update the comment above it, open a PR."
+            else
+              echo "**Do not bump yet.** $FAIL of $((PASS+FAIL)) checks failed against \`${SHA:0:8}\`."
+              echo
+              echo "Follow **docs/UPGRADING-HERMES.md** section 5 (\"when an anchor drifts\"). Never loosen an anchor to make the build pass."
+            fi
+            echo
+            cat report.md
+            echo
+            echo "_Automated by .github/workflows/anchor-check.yml. Report-only; the pin is never changed by this job._"
+          } > body.md
+          cat body.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          REF="${{ steps.ref.outputs.ref }}"
+          TITLE="hermes-agent upstream: $REF"
+          NUM=$(gh issue list --search "in:title \"$TITLE\"" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$NUM" ]; then
+            gh issue edit "$NUM" --body-file body.md
+            echo "updated issue #$NUM"
+          else
+            gh issue create --title "$TITLE" --body-file body.md --label upstream
+            echo "created issue"
+          fi

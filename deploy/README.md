@@ -1,102 +1,80 @@
-# Render Deployment Guide
+# deploy/ — the container and its boot script
 
-## Overview
+Two files ship into the image: `start.sh` (the entrypoint) and the two
+build-time patches under `patches/`. The full first-run guide is
+[docs/SETUP.md](../docs/SETUP.md); this page is the map of what happens at
+build and at boot.
 
-Deploys the Hermes expense tracker as a Docker web service on Render (Singapore region, Starter $7/mo) with a 1GB persistent disk for sessions, memories, and cron jobs.
+## What the build does (`Dockerfile`, repo root)
 
-Uses Telegram Bot API for the messaging interface — permanent token, no session management needed.
+1. `python:3.11-slim` + `git curl tzdata ffmpeg`, `TZ=Asia/Singapore`,
+   `MALLOC_ARENA_MAX=2` (a flatter memory profile for one long-lived
+   multi-threaded process in a 512 MB container).
+2. Fetches **one commit** of `NousResearch/hermes-agent` — the SHA in
+   `ARG HERMES_AGENT_SHA` — with three retries and a final check that the
+   commit it got is the one it asked for. Not a full clone: upstream's
+   history is multi-gigabyte and GitHub rate-limits shared build hosts.
+3. `uv pip install -e ".[all,messaging,edge-tts]"` plus `gspread google-auth`.
+   `[all]` no longer includes Telegram or edge-tts, and without them the
+   Telegram adapter would pip-install itself at every boot.
+4. Copies the six `tools/*.py` files in and appends one import line to
+   upstream's `model_tools.py` — a fail-loud canary, since tool discovery
+   swallows import errors.
+5. Applies the **two patches** in `patches/`. Each matches an exact anchor
+   string in `agent/conversation_loop.py`, exits non-zero if the anchor is
+   missing or ambiguous, and the Dockerfile then greps for the patch's
+   marker. An upstream refactor breaks the build loudly instead of shipping
+   unpatched behaviour. Never loosen an anchor to get green — see
+   [docs/UPGRADING-HERMES.md](../docs/UPGRADING-HERMES.md).
+6. Prunes upstream's bundled skill catalogue (the gateway re-seeds from that
+   directory on every start), then copies in `skills/`, `cli-config.yaml`,
+   the four slash-command bundles, the three memory files, `start.sh` and
+   the cron seeding script.
 
-## Setup Steps
+## What the patches do
 
-### 1. Create your Telegram bot
-
-1. Open Telegram and message **@BotFather**
-2. Send `/newbot`
-3. Choose a name (e.g., "My Expense Tracker")
-4. Choose a username (e.g., `my_expense_bot`)
-5. Copy the **bot token** (looks like `123456:ABC-DEF1234...`)
-6. Message your new bot once (so it can reply to you)
-7. Get your user ID: message **@userinfobot** and it'll reply with your ID
-
-### 2. Create the service on Render
-
-**Option A — Blueprint (recommended):**
-1. Go to https://dashboard.render.com/blueprints
-2. Click **New Blueprint Instance**
-3. Connect GitHub → select **your fork of this repo**
-4. Render reads `render.yaml` and sets everything up
-
-**Option B — Manual:**
-1. **New** → **Web Service** → connect the private repo
-2. Runtime: **Docker**
-3. Region: **Singapore**
-4. Plan: **Starter** ($7/mo)
-5. Add a **Disk**: mount path `/data`, size 1GB
-
-### 3. Set environment variables
-
-In Render dashboard → your service → **Environment**:
-
-| Variable | Value | How to get it |
-|---|---|---|
-| `OPENAI_API_KEY` | Your API key | OpenAI API dashboard |
-| `SUPABASE_URL` | `https://<ref>.supabase.co` | Supabase project API settings — **required** |
-| `SUPABASE_SERVICE_KEY` | The secret / service_role key | Same page — **required**, server-side only |
-| `PEHD_LLM_USAGE_DIR` | `/data/llm_usage` | Optional; where per-call LLM usage JSONL is written |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Entire JSON file contents | Optional — only for the Sheet backup |
-| `GSPREAD_SPREADSHEET_ID` | Spreadsheet ID | Optional — only for the Sheet backup |
-| `WEBHOOK_HMAC_SECRET` | Random string | `openssl rand -hex 32`. **Not optional** — unset means the published placeholder becomes your signing key |
-| `TELEGRAM_BOT_TOKEN` | Bot token | From @BotFather (step 1) |
-| `TELEGRAM_ALLOWED_USERS` | Your user ID | From @userinfobot (step 1) |
-
-### 4. Deploy
-
-Click **Manual Deploy** → **Deploy latest commit**. Watch the logs for:
-```
-Starting Hermes gateway...
-Telegram bot connected
-```
-
-### 5. Update Gmail Apps Script webhook URL
-
-Once deployed, your service URL will be something like:
-```
-https://YOUR-RENDER-SERVICE.onrender.com
-```
-
-Update `WEBHOOK_URL` in your Apps Script (`Code.gs`):
-```javascript
-const WEBHOOK_URL = "https://YOUR-RENDER-SERVICE.onrender.com/webhooks/expense-ingest";
-```
-
-Then run `clasp push` to deploy the update.
-
-### 6. Test it
-
-1. Open Telegram → message your bot: **"Hello"**
-2. It should reply (confirms Telegram + LLM working)
-3. Send: **"How much have I spent this month?"**
-4. It should query your Sheet and respond
-
-## Costs
-
-| Item | Cost |
+| Patch | Why it exists |
 |---|---|
-| Render Starter | $7/month |
-| 1GB Disk | Included |
-| OpenAI API | Usage-based |
-| Google Sheets API | Free (60 req/min) |
-| Telegram Bot API | Free forever |
+| `suppress_reply_on_silent_tools.py` (v3) | `log_expense` sends its own Telegram bubble. Without this, the model then sends a second reply. The patch exits the agent loop when the latest tool result carries `assistant_reply_required: false`, emitting hermes' own `NO_REPLY` silence token (an empty reply is rewritten into a warning bubble by upstream). It scans only the current turn and closes the transcript with the model's own words, for reasons the file documents at length. |
+| `log_llm_usage.py` | Appends one JSON line per API call to `/data/llm_usage/usage-YYYY-MM.jsonl` — platform, session, tokens, cache hits, cost — so you can attribute spend without the OpenAI dashboard. `scripts/summarize_llm_usage.py` reads it. |
 
-## Updating
+Both honour `PEHD_PATCH_TARGET=<path>` so you can dry-run them against a
+downloaded copy of upstream before bumping the pin.
 
-Push to the private repo → Render auto-deploys:
-```bash
-git push render main
-```
+## What `start.sh` does at boot
 
-## Troubleshooting
+1. Writes `GOOGLE_SERVICE_ACCOUNT_JSON` (if set) to `/data/service-account.json`.
+2. Exports every env var and writes `/root/.hermes/.env`.
+3. Symlinks `sessions/`, `memories/`, `cron/`, `llm_usage/` from the
+   persistent disk into `HERMES_HOME`, creating them on first boot.
+4. Prunes old session transcripts (cron transcripts after 30 days,
+   everything else after 365).
+5. Substitutes the two placeholders in `config.yaml` — hermes YAML cannot
+   read env vars, so `__WEBHOOK_SECRET_PLACEHOLDER__` and
+   `__OPENAI_KEY_PLACEHOLDER__` are replaced with `sed`. **If
+   `WEBHOOK_HMAC_SECRET` is unset the script prints four `WARNING:` lines and
+   the published placeholder becomes your live signing key.**
+6. Seeds the six cron jobs once per disk (marker `/data/cron/.seeded`).
+7. `exec hermes gateway run` in the foreground (`gateway start` wants
+   systemd, which the container lacks).
 
-- **Bot not responding**: Check Render logs for errors. Verify `TELEGRAM_BOT_TOKEN` is correct.
-- **Sheets errors**: Verify the service account email has Editor access to your sheet.
-- **Webhook not working**: Make sure the Render URL is correct in `Code.gs` and the `WEBHOOK_HMAC_SECRET` matches.
+## The two filesystems
+
+`/root/.hermes/` is rebuilt on every deploy — ephemeral. `/data/` is the
+1 GB persistent disk. Anything that must survive a deploy lives on `/data`
+and is symlinked in by `start.sh`; anything copied by the Dockerfile is
+replaced on the next build.
+
+## Environment variables
+
+`render.yaml` is authoritative; `.env.example` lists the same nine with
+comments. The Google pair is optional (Sheet backup only); everything else
+is required, and `WEBHOOK_HMAC_SECRET` is the one you must not skip.
+
+## Hosting elsewhere
+
+`render.yaml` is Render-specific; the `Dockerfile` is not. Any host that
+gives you a container with a persistent volume at `/data`, environment
+variables, and a process that is never put to sleep will work — the gateway
+polls Telegram, serves the webhook on port 8644, and runs cron in-process.
+See "Swapping the pieces" in [docs/SETUP.md](../docs/SETUP.md).

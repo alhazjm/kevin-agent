@@ -1,13 +1,22 @@
 # User Profile — `<USER_FIRST_NAME>`
 
 > Tier-2 persistent memory: identity, people, preferences, goals.
-> Stable, slow-changing. Loaded into the system prompt every turn.
-> If something here changes more than once a month, it belongs in MEMORY.md or the Sheet, not here.
+> Stable, slow-changing. If something here changes more than once a month,
+> it belongs in MEMORY.md or the ledger, not here.
+>
+> **Where hermes actually reads this from (verified at hermes 0.21.0):**
+> `HERMES_HOME/memories/USER.md`, which `deploy/start.sh` symlinks to the
+> persistent disk — NOT `/root/.hermes/USER.md`, where the Dockerfile
+> copies it. So the copy baked into the image is never in the system
+> prompt; what the agent reads is whatever is on `/data/memories/`. The
+> shipped Dockerfile leaves this as-is (fixing it changes agent behaviour).
+> To make your USER.md live, copy it onto the disk once from the Render
+> shell: `cp /root/.hermes/USER.md /root/.hermes/memories/USER.md`.
+> Size it as if it loaded every turn regardless.
 
-This is a **sanitised template**. The deployed instance carries a real
-`USER.md` with names, card numbers, and goals. Fork this file, fill the
-placeholders in, save as `USER.md` in the same directory, and add a
-`COPY hermes-config/USER.md /root/.hermes/USER.md` line to your Dockerfile.
+This is a **sanitised template**. Fill the placeholders in and save as
+`USER.md` in this directory — the Dockerfile already COPYs that filename,
+and the real file is gitignored so it cannot be committed by accident.
 
 ## Identity
 
