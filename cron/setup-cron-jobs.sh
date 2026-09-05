@@ -3,14 +3,26 @@ set -euo pipefail
 
 echo "=== Setting up Hermes cron jobs for expense tracker ==="
 
-# CLI shape per hermes_cli/main.py at HERMES_AGENT_SHA=73d0b083:
+# CLI shape (unchanged at HERMES_AGENT_SHA=5fc308a7 / v0.20.6):
 #   hermes cron create <schedule> [prompt] --skill X --skill Y --deliver target
 # `schedule` and `prompt` are POSITIONAL; `--skill` is repeatable (NOT `--skills`).
+# There is still NO per-job toolset flag, which is why the cron tool allowlist
+# has to live in hermes-config/cli-config.yaml under `platform_toolsets.cron`.
+#
+# SILENCE (changed at the 0.20.6 bump): jobs that have nothing to report must
+# reply with exactly `[SILENT]`, not an empty response. Two reasons. (1) The
+# `send_message` tool no longer exists upstream — outbound messaging is
+# gateway-side now — so telling the model to "skip send_message" points at
+# nothing. (2) An EMPTY cron response does suppress delivery, but it is also
+# booked as a soft-fail, which increments a persisted failure streak that
+# later gets appended to the first GENUINE failure message as "this job has
+# failed N runs in a row". Quiet nights were quietly poisoning that counter.
+# `[SILENT]` suppresses delivery AND counts as success.
 
 # Daily 9 PM — spending review that builds on prior insights
 hermes cron create \
     "0 21 * * *" \
-    "Daily spending review. (1) First call get_insights for this month to see prior observations. (2) Then call get_remaining_budget to check today's numbers. (3) Send a brief summary in Telegram that CITES any relevant prior insights by date. Warn me if any category is over 80% used. Use Telegram-friendly formatting: short bullet lines or plain 'Category: spent / limit' rows. DO NOT use markdown tables (pipe syntax) or headers — Telegram does not render them. (4) Call generate_daily_insight() exactly once — it deterministically picks today's ONE noteworthy fact and writes the Insights row itself. If it returns status='ok', you may cite its insight text in your summary; on 'exists' or 'no_match', move on silently. Do NOT call write_insight yourself in this flow. (5) Call sweep_loan_offsets() exactly once — it completes the ledger for loans marked repaid via the PWA button. If count > 0, add one short line per completed repayment to the summary (e.g. 'Logged Adam's \$50 repayment ✓'). If count is 0, say NOTHING about loans — no mention, no 'no repayments today'. (6) End the message with: 💭 Journal: reply to this with one sentence if anything interesting happened today (decision, regret, good meal, stress) — I'll save it." \
+    "Daily 9 PM review — short, decision-grade, no filler. (1) Call get_remaining_budget. Print its _attention.lines VERBATIM as the warnings block (variable categories at 80%+ and fixed bills that came in OVER their usual amount) — do NOT list any other category, do NOT mention on-track categories, do NOT list a fixed bill (subscription, insurance, utilities) merely for being at 100%. If _attention.lines is empty, write one line: 'Budgets: nothing to flag.' (2) Call generate_daily_insight() exactly once. If it returns status='ok', print its insight text as ONE 💡 line and add a single concrete next step after it (e.g. 'Reply: cap Personal - Travel at \$X' or 'Reply: that was a trip cost'). If it returns 'exists' or 'no_match', print no insight at all — never pad with old insights; do NOT call get_insights or write_insight in this flow. (3) Call sweep_loan_offsets() exactly once; if count > 0 add one short line per completed repayment (e.g. 'Logged Adam's \$50 repayment ✓'); if count is 0 say NOTHING about loans. (4) End with: 💭 Journal: reply with one sentence if anything interesting happened today — I'll save it. Telegram formatting only: short lines, no markdown tables or headers. The whole message must fit on one phone screen." \
     --skill expense-tracker \
     --skill budget-manager \
     --deliver telegram
@@ -19,7 +31,7 @@ echo "Created: Daily 9 PM spending check"
 # Friday 6 PM — weekly summary (+ cards on pace)
 hermes cron create \
     "0 18 * * 5" \
-    "Generate my weekly expense summary with top categories, top merchants, and budget pace. Keep it fun. Then append a 'Cards on pace' section: call get_card_cap_status() and show one short bullet per card (traffic light 🟢/🟡/🔴, cycle spend / cap, percent used). If get_card_cap_status returns status='setup_required', skip the cards section entirely — no message, no warning. Use Telegram-friendly formatting: short bullet lines, no markdown tables or headers." \
+    "Generate my weekly expense summary: total spent, top 3 categories, top merchants. Keep it fun. For budget pace, call get_remaining_budget and print ONLY its _attention.lines verbatim (skip the section if empty) — never list fixed bills (subscriptions, insurance, utilities) as watch/over, and never list on-track categories. Then append a 'Cards this month' section: call get_bonus_pool_status() and print its `lines` VERBATIM, one bullet each — do NOT call get_card_cap_status for this, do NOT add cards it omits, and never sum caps across categories into a per-card total. If get_bonus_pool_status returns status='setup_required', skip the cards section entirely — no message, no warning. Use Telegram-friendly formatting: short bullet lines, no markdown tables or headers." \
     --skill weekly-summary \
     --skill budget-manager \
     --skill card-optimiser \
@@ -36,19 +48,16 @@ hermes cron create \
     --deliver telegram
 echo "Created: 1st of month monthly report"
 
-# Daily noon — budget warning check
-hermes cron create \
-    "0 12 * * *" \
-    "Silently check if any budget category is over 80% used. Only message me if there's a warning. When warning, use Telegram-friendly formatting: short bullet lines, no markdown tables or headers." \
-    --skill budget-manager \
-    --deliver telegram
-echo "Created: Daily noon budget warning"
+# (The daily-noon "over 80%" job was removed 2026-08-17: with the 21:00
+# review carrying the deterministic _attention block, a second daily
+# budget ping was noise — the owner asked for exactly one evening touchpoint.
+# Live disks still hold it until `hermes cron remove <id>`.)
 
 # Sunday 10 PM — sweep for missed transactions (LLM/API failure recovery).
 # Silent unless something is actually missed. days_back=7 matches cadence.
 hermes cron create \
     "0 22 * * 0" \
-    "Silently call sweep_missed_transactions(days_back=7). If missed_count is 0, produce an EMPTY response and do NOT message me — skip send_message entirely. If missed_count > 0, send ONE Telegram message listing each missed transaction on its own short line (date, merchant, amount, payment_method), then ask which to log. Use Telegram-friendly formatting: short bullet lines, no markdown tables or headers. If the tool returns status='error' (WebhookLog tab missing), send a one-line heads-up: 'Sweep setup incomplete — WebhookLog tab not found.'" \
+    "Silently call sweep_missed_transactions(days_back=7). If missed_count is 0, reply with exactly [SILENT] and nothing else — do not message me. If missed_count > 0, send ONE Telegram message listing each missed transaction on its own short line (date, merchant, amount, payment_method), then ask which to log. Use Telegram-friendly formatting: short bullet lines, no markdown tables or headers. If the tool returns status='error' (WebhookLog tab missing), send a one-line heads-up: 'Sweep setup incomplete — WebhookLog tab not found.'" \
     --skill expense-tracker \
     --deliver telegram
 echo "Created: Sunday 10 PM weekly sweep for missed transactions"
@@ -56,7 +65,7 @@ echo "Created: Sunday 10 PM weekly sweep for missed transactions"
 # 3 AM daily - rebuild the Google Sheet from Supabase (the ledger of
 # record). The Sheet is a read-only human view + the free-tier backup copy;
 # this replaced the dual-write mirror (migration PR 4). Silent on success.
-hermes cron create     "0 3 * * *"     "Silently call export_sheet_backup. If status is ok, produce an EMPTY response and do NOT message me - skip send_message entirely. If status is 'setup_required' the Sheet backup is simply not configured, which is a supported setup - also produce an EMPTY response and say NOTHING. If it returns status='error', send exactly one short line: 'Nightly sheet export failed: <message>'."     --skill expense-tracker     --deliver telegram
+hermes cron create     "0 3 * * *"     "Silently call export_sheet_backup. If status is ok, reply with exactly [SILENT] and nothing else - do not message me. If it returns status='error', send exactly one short line: 'Nightly sheet export failed: <message>'."     --skill expense-tracker     --deliver telegram
 echo "Created: 3 AM nightly Sheet export from Supabase"
 
 # 07:00 every Jan 1 - freeze the year that just ended into an immutable

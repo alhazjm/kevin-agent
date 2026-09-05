@@ -23,8 +23,9 @@
  *   - 'Source: "applepay"' / "Merchant: {Sheng Siong Supermarke}"
  *     / "Amount: {$6.95}" / "ts: {2026-07-31T13:52:52+08:00}"
  *
- * Non-SGD transactions are converted to SGD at ingest via frankfurter.app
- * (ECB rates, no API key). The original currency + amount is stamped in the
+ * Non-SGD transactions are converted to SGD at ingest via frankfurter.dev
+ * (ECB rates, no API key; api.frankfurter.app now 301-redirects there —
+ * verified 2026-08-17). The original currency + amount is stamped in the
  * `notes` field so the conversion is traceable. If the FX lookup fails, a
  * Telegram alert is sent and no Transactions row is written — the user logs
  * it manually after checking the bank app.
@@ -75,9 +76,43 @@ function setupTrigger() {
 }
 
 
+// Ingest pacing — the token-free queue. hermes runs EVERY webhook POST as
+// its own concurrent agent session (~28k prompt tokens x 3-5 model calls),
+// so two bank emails arriving in the same 5-min tick blew through OpenAI's
+// Tier-1 200k tokens/min ceiling and the ingest failed with retries
+// (2026-08-15; rule written 2026-08-17). Rather than build a queue in the
+// container, pace at the source: at most MAX_WEBHOOKS_PER_TICK posts per
+// tick, WEBHOOK_SPACING_MS apart, and everything beyond the cap is left
+// UNREAD (not audited, not marked read) so the next tick runs the full
+// path for it. Only webhook SENDS count — scanned emails, audit rows and
+// fx_failed alerts do not.
+var MAX_WEBHOOKS_PER_TICK = 2;
+var WEBHOOK_SPACING_MS = 20000;
+
 function checkNewEmails() {
+  // Audit-target guard. Without both Script Properties, logAudit silently
+  // writes Sheet-only rows — and the sweep reads ONLY the Supabase
+  // webhook_log table, so the whole safety net is blind (found 2026-08-03:
+  // webhook_log was empty and nobody had been told). Alert at most once
+  // per 6h so a missing property is loud without being spam.
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    var props = PropertiesService.getScriptProperties();
+    var lastWarn = Number(props.getProperty("AUDIT_WARN_TS") || 0);
+    if (Date.now() - lastWarn > 6 * 3600 * 1000) {
+      sendTelegramAlert(
+        "⚠️ Webhook audit is running Sheet-only — the sweep can't see "
+        + "those rows. Set SUPABASE_URL and SUPABASE_SERVICE_KEY in "
+        + "Apps Script → Project Settings → Script Properties."
+      );
+      props.setProperty("AUDIT_WARN_TS", String(Date.now()));
+    }
+  }
+
   var threads = GmailApp.search(GMAIL_QUERY, 0, 10)
     .concat(GmailApp.search(SHORTCUT_QUERY, 0, 10));
+
+  // Webhook posts made this tick (pacing — see MAX_WEBHOOKS_PER_TICK).
+  var webhooksSent = 0;
 
   for (var i = 0; i < threads.length; i++) {
     var messages = threads[i].getMessages();
@@ -85,6 +120,13 @@ function checkNewEmails() {
     for (var j = 0; j < messages.length; j++) {
       var msg = messages[j];
       if (!msg.isUnread()) continue;
+
+      // Per-tick cap reached: stop BEFORE touching this message so it is
+      // not partially processed — no parse, no audit row, no markRead. It
+      // stays unread and the next tick (5 min) picks it up from scratch.
+      // Checked here (not after the send) so a tick that spends its
+      // budget doesn't strand a fully-processed message unread either.
+      if (webhooksSent >= MAX_WEBHOOKS_PER_TICK) return;
 
       var from = msg.getFrom().toLowerCase();
       var subject = msg.getSubject() || "";
@@ -127,6 +169,20 @@ function checkNewEmails() {
         // traceability. If the FX lookup fails, we skip the webhook and
         // fire a Telegram nudge so the user can log it manually.
         var fxFailed = false;
+        // Always present in the payload (empty when no FX ran) so the
+        // route template's {notes} renders "" instead of a literal
+        // placeholder — the agent reads this line for the orig: signal.
+        if (parsed.notes === undefined || parsed.notes === null) parsed.notes = "";
+        // BND is pegged 1:1 to SGD (Currency Interchangeability Agreement,
+        // 1967) and frankfurter/ECB does not list it — so BND used to hit
+        // the fx_failed path EVERY time (J HOTEL, BND 374, 2026-08-29:
+        // never logged, and the alert never arrived either — see
+        // debugAudit). Convert at par, stamped like any other FX.
+        if (parsed.currency === "BND") {
+          parsed.notes = (parsed.notes ? parsed.notes + "; " : "")
+            + "orig: BND " + parsed.amount.toFixed(2) + " @ 1.000000 (SGD peg)";
+          parsed.currency = "SGD";
+        }
         if (parsed.currency !== "SGD") {
           var fx = convertToSGD(parsed.amount, parsed.currency);
           if (fx) {
@@ -152,6 +208,13 @@ function checkNewEmails() {
           parsed.date, parsed.merchant, parsed.amount, parsed.payment_method,
           parsed.time
         );
+        // The key travels WITH the payload (end-to-end idempotency): the
+        // ledger uses this exact value instead of recomputing from
+        // LLM-reassembled arguments. 2026-08-02: one Gojek ride logged
+        // twice because two agent attempts carried times a minute apart —
+        // with the key in the payload, retries of the same email can
+        // never mint a second key.
+        parsed.idempotency_key = idemKey;
         logAudit(parsed, idemKey);
 
         if (fxFailed) {
@@ -163,7 +226,11 @@ function checkNewEmails() {
             + "amount when you know it and I'll log it manually."
           );
         } else {
+          // Space the 2nd+ post of the tick out so concurrent agent
+          // sessions don't stack inside the same TPM window.
+          if (webhooksSent > 0) Utilities.sleep(WEBHOOK_SPACING_MS);
           var status = sendWebhook(parsed);
+          webhooksSent++;
           updateWebhookStatus(idemKey, status);
         }
       }
@@ -442,11 +509,14 @@ function formatDateSlash(dateStr) {
 
 
 /**
- * Convert a foreign-currency amount to SGD via frankfurter.app.
+ * Convert a foreign-currency amount to SGD via frankfurter.dev.
  *
  * Frankfurter publishes daily ECB reference rates with no API key. The
- * `?amount=N&from=XXX&to=SGD` endpoint does the multiply server-side, so
- * `data.rates.SGD` is the SGD-equivalent of the input amount.
+ * host moved: api.frankfurter.app now 301-redirects to api.frankfurter.dev
+ * (verified 2026-08-17; UrlFetchApp follows redirects, but we call the
+ * new host directly). `/v1/latest?base=XXX&symbols=SGD` returns the
+ * per-unit rate in `data.rates.SGD` (shape {rates:{SGD:x}, date:...});
+ * the multiply happens here.
  *
  * Returns: {amount, rate, source, fxDate} on success, or null on any
  * failure (network, non-200, currency unsupported, JSON shape unexpected).
@@ -459,10 +529,9 @@ function convertToSGD(amount, currency) {
   if (currency === "SGD") {
     return { amount: amount, rate: 1.0, source: "passthrough", fxDate: "" };
   }
-  var url = "https://api.frankfurter.app/latest"
-          + "?amount=" + encodeURIComponent(amount)
-          + "&from=" + encodeURIComponent(currency)
-          + "&to=SGD";
+  var url = "https://api.frankfurter.dev/v1/latest"
+          + "?base=" + encodeURIComponent(currency)
+          + "&symbols=SGD";
   try {
     var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (response.getResponseCode() !== 200) {
@@ -474,11 +543,12 @@ function convertToSGD(amount, currency) {
       Logger.log("convertToSGD: unexpected response shape for " + currency);
       return null;
     }
-    var sgdAmount = data.rates.SGD;
+    // Per-unit rate straight from the API; the notes stamp prints it
+    // with toFixed(6) — format unchanged from the amount/from/to era.
+    var rate = data.rates.SGD;
     return {
-      amount: sgdAmount,
-      // Per-unit rate, useful for the notes stamp.
-      rate: amount > 0 ? sgdAmount / amount : 0,
+      amount: amount * rate,
+      rate: rate,
       source: "frankfurter",
       fxDate: data.date || "",
     };
@@ -497,6 +567,82 @@ function convertToSGD(amount, currency) {
  * Requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID Script Properties.
  * Returns true on 2xx, false on missing config / non-2xx / exception.
  */
+/**
+ * One-shot diagnostic — run MANUALLY from the editor (Run > debugAudit)
+ * and read the execution log. Exists because both failure paths here are
+ * silent by design when misconfigured: logAudit falls back to the Sheet,
+ * and sendTelegramAlert SKIPS quietly when the TELEGRAM_* properties are
+ * missing — which is exactly how the Supabase audit table stayed empty
+ * for a month while 249 rows piled up in the fallback tab and an
+ * fx_failed alert (J HOTEL, 2026-08-29) vanished (found 2026-09-01).
+ *
+ * Prints for each Script Property: set/missing, value length, and
+ * whether it has leading/trailing whitespace. Then does a REAL insert
+ * into webhook_log (webhook_status='diag', deleted immediately) and a
+ * REAL Telegram send, printing the HTTP codes. Green run = both paths
+ * work end to end.
+ */
+function debugAudit() {
+  var props = PropertiesService.getScriptProperties();
+  var names = ["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "WEBHOOK_HMAC_SECRET",
+               "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SPREADSHEET_ID"];
+  for (var i = 0; i < names.length; i++) {
+    var v = props.getProperty(names[i]);
+    if (v === null) {
+      Logger.log(names[i] + ": MISSING");
+    } else {
+      Logger.log(names[i] + ": set, length " + v.length
+        + (v !== v.trim() ? "  <-- HAS LEADING/TRAILING WHITESPACE" : ""));
+    }
+  }
+  var url = props.getProperty("SUPABASE_URL");
+  var key = props.getProperty("SUPABASE_SERVICE_KEY");
+  if (url && key) {
+    var resp = UrlFetchApp.fetch(url.replace(/\/+$/, "") + "/rest/v1/webhook_log", {
+      method: "post",
+      contentType: "application/json",
+      headers: { "apikey": key, "Authorization": "Bearer " + key,
+                 "Prefer": "return=minimal" },
+      payload: JSON.stringify({ bank: "DIAG", type: "card", amount: 1,
+        currency: "SGD", merchant: "DIAG TEST ROW", txn_date: "2026-01-01",
+        payment_method: "diag", idempotency_key: "0000000000000000",
+        webhook_status: "diag", matched: "" }),
+      muteHttpExceptions: true,
+    });
+    var bodyText = resp.getContentText();
+    Logger.log("Supabase insert: HTTP " + resp.getResponseCode()
+      + (resp.getResponseCode() >= 300 ? "  body: " + bodyText.slice(0, 300) : "  OK"));
+    if (bodyText.indexOf("secret API key in browser") !== -1) {
+      // Supabase's gateway blocks new-style sb_secret_* keys whenever the
+      // request LOOKS like a browser — and UrlFetchApp always sends a
+      // Mozilla/5.0 User-Agent that Apps Script cannot override. The same
+      // key works fine server-side (Kevin's container). Fix: use the
+      // LEGACY service_role JWT here instead (Supabase Dashboard →
+      // Settings → API Keys → "Legacy API keys" tab → service_role,
+      // starts with "eyJ"). Found live 2026-09-01 after a month of
+      // silent Sheet-only fallbacks.
+      Logger.log("FIX: put the LEGACY service_role JWT (starts 'eyJ', from "
+        + "Dashboard > Settings > API Keys > Legacy API keys) in "
+        + "SUPABASE_SERVICE_KEY. sb_secret_* keys are browser-blocked and "
+        + "Apps Script's User-Agent cannot be changed.");
+    }
+    var del = UrlFetchApp.fetch(url.replace(/\/+$/, "")
+      + "/rest/v1/webhook_log?idempotency_key=eq.0000000000000000", {
+      method: "delete",
+      headers: { "apikey": key, "Authorization": "Bearer " + key },
+      muteHttpExceptions: true,
+    });
+    Logger.log("Diag row cleanup: HTTP " + del.getResponseCode());
+  } else {
+    Logger.log("Supabase test SKIPPED (URL or key missing)");
+  }
+  var ok = sendTelegramAlert("🔧 debugAudit test — if you can read this, "
+    + "Apps Script → Telegram alerts work.");
+  Logger.log("Telegram alert send returned: " + ok
+    + (ok ? "" : "  <-- check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID properties"));
+}
+
+
 function sendTelegramAlert(text) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     Logger.log("sendTelegramAlert: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set; skipping");
@@ -615,7 +761,7 @@ function testIdempotencyKeyParity() {
     // different keys (the KOPITIAM $7.80 incident, 2026-07-25)
     ["2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "16:18",    "5fa19a03294bdad9"],
     ["2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "19:47",    "ad27b42f9385c92a"],
-    ["2026-07-24", "ACME CLOUD SERVICES", 27.40, "DBS/POSB card ending 4321", "21:03:11", "a5e4ac6b14c02f1d"],
+    ["2026-07-24", "Anthropic, PBC", 27.40, "DBS/POSB card ending 4321", "21:03:11", "57042d4fa9389e56"],
   ];
   var allPassed = true;
   for (var i = 0; i < cases.length; i++) {

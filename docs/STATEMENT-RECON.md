@@ -1,7 +1,7 @@
 # Statement reconciliation — the monthly ritual
 
 Repo-side tooling that diffs the DBS and UOB credit-card e-statements
-against the Supabase ledger once a month. It runs on your own machine (via
+against the Supabase ledger once a month. It runs on the owner's machine (via
 Claude Code or a plain terminal) — it is NOT a hermes tool: nothing here
 ships in the Render container, so there is no Dockerfile COPY line, no sed
 injection, no registry entry.

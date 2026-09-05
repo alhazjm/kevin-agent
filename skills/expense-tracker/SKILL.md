@@ -1,7 +1,7 @@
 ---
 name: expense-tracker
 description: Categorizes bank transactions and logs them to the Supabase expense ledger
-version: 5.7.0
+version: 5.10.0
 author: Hadi
 license: MIT
 platforms: [linux]
@@ -25,7 +25,7 @@ metadata:
 - The user asks "how am I doing this month?" or similar
 - The user asks for a **chart** or visual snapshot of their budget / spending
 - The user says "check for missed transactions", "sweep", "did any transactions get dropped?", or similar
-- A foreign-currency (FX-converted) transaction arrives while the user is on a trip — see "Travel mode"
+- A transaction arrives while the user is on a trip (FX-converted, YouTrip tap, or a manual foreign-currency entry) — see "Travel mode"
 - The user asks "how am I tracking on this trip?" or replies to a trip bubble correcting the bucket
 - A YouTrip top-up is logged — see "YouTrip top-ups → trip pots"
 - The user says a transfer was a loan, asks "who owes me money?", or says someone paid them back — see "Lending & IOUs"
@@ -94,6 +94,10 @@ metadata:
    `Lending` category (loan flows) may always be created with
    `create_category: true` — it is system-reserved, not user-invented,
    and the PWA hides it from budget bars by design.
+6. **The webhook route uses `skills/expense-ingest`** (a slim copy of the
+   categorisation + webhook flow). Any edit to categorisation rules, the
+   multi-category list, heuristics, the silence contract, or the
+   travel/YouTrip rules MUST be mirrored there in the same commit.
 
 ## Transaction Sources
 
@@ -119,10 +123,11 @@ For every incoming transaction, follow this order:
    STOP. Do NOT call `log_expense_pending`. Do NOT call
    `learn_merchant_mapping` now or after any later correction. The user
    replies to the bubble if the category was wrong, and that's it.
-2. **Travel-mode routing.** If the incoming txn's `notes` carries an
-   `orig:` prefix (means it was FX-converted from a non-SGD amount), call
-   `get_active_travel_mode()`. If `active=true`, the user is on a trip —
-   see "Travel mode" below. Otherwise fall through to step 3.
+2. **Travel mode is the TOOL's job, not yours.** When a trip is active
+   for the transaction date, `log_expense` / `log_expense_pending` route
+   the row into the trip category themselves (see "Travel mode" below).
+   You do NOT call `get_active_travel_mode` here — just keep proposing
+   the HOME category via steps 3–5; the tool turns it into the bucket.
 3. **Check the MerchantMap.** Call `lookup_merchant_category` with the raw
    merchant string. If it returns a `match`, use that category directly — do
    NOT ask the user. This is how prior corrections become permanent.
@@ -181,7 +186,7 @@ if needed**. Do NOT call `log_expense_pending`. Do NOT call
 | Convenience stores (7-Eleven) | `Personal - Food & Drinks` |
 
 The user knows the bubble will default and will reply with the right
-category (`sam food`, `miso litter`, `to claim`, etc.) when the default is
+category (`nabs food`, `haku litter`, `to claim`, etc.) when the default is
 wrong — the existing reply-to-edit flow handles the correction. When the
 user replies to correct, call `edit_expense(txn_id=..., new_category=...)`
 and STOP — do NOT follow up with `learn_merchant_mapping`.
@@ -191,38 +196,70 @@ and STOP — do NOT follow up with `learn_merchant_mapping`.
 - GrabFood, Deliveroo, restaurants → Personal - Food & Drinks
 - Insurance / subscription names → match the exact category name in the Budget tab
 
-## Travel mode
+## Travel mode (v5.9 — the TOOL routes; you propose the HOME category)
 
 When the user is on a trip, the `TravelMode` tab carries one row per trip
 with a date range, the trip's main Budget category, and a per-bucket
 allocation (e.g. `food=450; transport=300; flight=800; misc=450`).
 
-**Activation rule** (all three must hold):
+**Trip routing happens INSIDE `log_expense` / `log_expense_pending`.**
+When a trip is active for the transaction date, the tool — not you —
+decides whether the row belongs to the trip. You do NOT call
+`get_active_travel_mode` for routing, do NOT pick the trip category, and
+do NOT write `[bucket:X]` tags. Your only job during a trip: propose the
+HOME category exactly as always (multi-category list → MerchantMap →
+judgment → ask), pass `notes` / `currency` / `payment_method` / `time` /
+`idempotency_key` through verbatim, and stay silent on `bubble_sent: true`.
 
-1. The incoming txn's `notes` contains an `orig:` prefix — Apps Script
-   stamps this when it FX-converts a non-SGD amount. Pure-SGD txns
-   (Spotify mid-trip, phone bill) skip travel mode by design.
-2. `get_active_travel_mode()` returns `active=true` for today.
-3. `lookup_merchant_category()` returns NO match — a learned mapping
-   takes precedence over travel mode (so e.g. a recurring Amazon
-   subscription doesn't get re-routed to a trip bucket).
+Inside the tool, one of these signals routes the row:
 
-When all three hold, route the txn:
+- **Signal A** — `payment_method` contains "youtrip" (Shortcut taps) →
+  category = the trip's `trip_category`, `[bucket:X]` derived from your
+  proposed home category (food / transport / shopping / health / lodging /
+  misc via a keyword map), pot-internal (excluded from monthly totals —
+  unchanged).
+- **Signal B** — `notes` carry `orig:` (bank FX-converted, e.g. a DBS card
+  in KL) → category = `trip_category`, `[bucket:X]` from your proposed
+  category. A MerchantMap match now decides the BUCKET, never the category
+  — the old "a learned mapping beats travel mode" rule is dead (it sent
+  Gojek-in-KL to the home Personal - Travel budget → 912%).
+- **Signal C** — `currency` != SGD on a manual entry ("rm33") → converted
+  to SGD IN THE TOOL first (frankfurter, stamped as `orig: MYR 33.00 @
+  0.313220 (frankfurter 2026-08-13)` exactly like Code.gs), then routed as
+  Signal B.
+- **No signal** (SGD, no `orig:`, not YouTrip — Shopee for home, PayLah to
+  a friend, insurance): NORMAL flow, untouched. Currency / pot is the guard
+  against "everything during the trip is travel", not the date.
+- **Never routed**: YouTrip top-ups (category `YouTrip Top-up` / the
+  transfer category) — those get `[trip:]` tags via `link_topup_to_trip`
+  as before; and rows already in the trip category.
+- **Never routed either**: fixed monthly bills (category `kind: fixed` in
+  `category_meta` — Anthropic, ChatGPT, iCloud… even when billed in USD
+  mid-trip), and any call with `route_to_trip: false` — set that ONLY when
+  the user explicitly says the purchase is not a trip cost ("that Amazon
+  order was for home").
+- **Pending flow**: when a signal applies, `log_expense_pending` does NOT
+  ask — it logs straight into the trip category with `[bucket:misc]` and
+  the normal bubble (a trip spend's home category matters little; the pot
+  is the unit).
+- **Manual foreign amounts = cash unless told otherwise** (the owner,
+  2026-08-18: "if I key in rm it means I used cash unless I specify it's a
+  failed YouTrip txn"). So "rm33 food on train" → no payment method →
+  converted to SGD, routed to the trip via the `orig:` signal, and COUNTED
+  in the month (cash left the wallet). Only when the user names YouTrip
+  ("rm33 on youtrip", "youtrip failed, paid rm33") pass
+  `payment_method="YouTrip Card"` — that makes it pot-internal.
 
-- **Category**: use the trip row's `trip_category` (e.g. `Travel - ID 2026-04`).
-- **Bucket pick**: classify the merchant into a bucket name from the
-  trip's `budget_map` keys (typical buckets: `food`, `transport`,
-  `flight`, `activities`, `lodging`, `misc`). Use your judgment — a
-  warung kopi is `food`; a Grab ride is `transport`; a tour is
-  `activities`. Default to `misc` if nothing else fits.
-- **Notes**: pass `notes="[bucket:<name>] <freeform>"`. The `[bucket:X]`
-  prefix at the START is mandatory — that's how `get_trip_budget_status`
-  computes per-bucket spend later. Keep any FX `orig:` content that came
-  in by appending it after a space (the Apps Script-supplied notes will
-  already contain `orig:`; just prepend the bucket tag).
-- Call `log_expense` normally. The bucket-budget nudge fires
-  automatically inside `handle_log_expense` when a bucket crosses 80%
-  or 100% — you don't send those nudges yourself.
+The applied routing comes back as `trip_routed: {trip_label,
+from_category, to_category, bucket, signal}` — informational; the bubble
+already shows it, so the silence contract still holds. The bucket-budget
+nudge fires automatically inside `handle_log_expense` when a bucket
+crosses 80% or 100% — you don't send those nudges yourself.
+
+**Manual foreign-currency entries** ("rm33 nasi lemak", "€12 coffee"):
+pass `currency` (`MYR`, `EUR`, …) and the ORIGINAL amount to
+`log_expense`; the tool converts to SGD and stamps the `orig:` trace
+itself. NEVER convert yourself and never write `orig:` into notes by hand.
 
 **When the user replies to a trip bubble correcting the bucket** ("that
 was activities, not food"):
@@ -268,9 +305,16 @@ normal categorisation flow; the confirmation bubble fires as usual):
 1. Call `get_active_travel_mode()`.
 2. **Exactly one active trip** (`active=true` and no `overlap_warning`):
    call `link_topup_to_trip(txn_id=<the top-up>, trip_label=<label>)` —
-   silently, no question. Then emit an EMPTY assistant reply (the log
-   bubble already confirmed the transaction; the link needs no fanfare).
-3. **Otherwise** (no active trip, or several) ask ONE question offering:
+   no question asked. Its result carries NO silence flag (only the earlier
+   log bubble did), so end with ONE short line, e.g. `✈ Linked to JB Trip.`
+   — never an empty reply after a non-bubble tool.
+3. **No active trip**: end with one short line — never an empty reply
+   (the log bubble's silence flag was consumed by the earlier call; an
+   empty reply after a non-flagged tool triggers the framework's
+   "nudging to continue" retry, which leaked meta-text on 2026-08-31):
+   `✈ Top-up logged, no active trip — reply "trip: <label>" or "new
+   trip" to link it, or ignore.`
+3b. **Several active trips** — ask ONE question offering:
    - the known trip labels — from `get_active_travel_mode`, or
      `get_trip_budget_status`'s `available_labels` when you need the
      full list;
@@ -307,12 +351,13 @@ the money was already counted when the top-up left the bank, so the
 dashboard excludes them from monthly totals — never treat one as new
 outflow when summarising.
 
-- Trip active → categorise into the trip's category with a `[bucket:x]`
-  tag, exactly like any travel-mode transaction.
+- Trip active → the tool routes them into the trip's category with a
+  `[bucket:x]` tag (Signal A in "Travel mode"); you still propose the
+  home category as always.
 - No trip active → categorise normally (ask if unclear); the category
   is for the record, not the budget bars.
-- Foreign-currency taps arrive FX-converted with an `orig:` note — the
-  normal travel-mode activation signal applies.
+- Foreign-currency taps arrive FX-converted with an `orig:` note — Signal
+  B — but Signal A already covers them; either way the tool routes.
 
 ## Lending & IOUs (v5.7)
 
@@ -414,9 +459,19 @@ When the `expense-ingest` webhook fires:
 
 1. Extract `merchant`, `amount`, `currency`, `date`, `payment_method`, `type`, `bank` from the payload.
 2. Run the categorisation flow above to pick a category.
-3. Call `log_expense` with `source="email"` and the appropriate fields.
-   The tool sends the confirmation bubble automatically.
-4. If the result includes `new_category_created: true`, follow up:
+3. Call `log_expense` with `source="email"`, `time` from the payload's
+   Time line, `notes` copied VERBATIM from the payload's Notes line when
+   it is non-empty (it carries the `orig:` FX trace — the tool's
+   travel-routing signal; omit when empty or a curly-brace placeholder), and
+   `idempotency_key` copied EXACTLY from the payload's "Idempotency key"
+   line (omit the argument if that line is empty or shows a curly-brace
+   placeholder — never invent a key). The verbatim key is what makes a
+   retried webhook dedupe. The tool sends the confirmation bubble
+   automatically.
+4. If the result includes `possible_duplicate_of`, say NOTHING extra —
+   the bubble already carries the ⚠️ near-duplicate warning and the
+   delete instruction. The silence contract stands.
+5. If the result includes `new_category_created: true`, follow up:
    ```
    📂 New category created: "Miso Litter"
    Want to set a monthly budget for it? (e.g. $50/month)
@@ -427,10 +482,13 @@ When the `expense-ingest` webhook fires:
 
 When the user says "I spent $30 at IKEA" or sends `/log`:
 
-1. Parse the amount and merchant (ask if missing).
-2. Run the categorisation flow to pick a category.
-3. Call `log_expense` with `source="manual"`.
-   The tool sends the confirmation bubble automatically.
+1. Parse the amount and merchant (ask if missing). A foreign amount
+   ("rm33", "€12") keeps its ORIGINAL currency and value — see "Travel
+   mode": the tool converts and stamps `orig:`; never convert yourself.
+2. Run the categorisation flow to pick a category (the HOME category,
+   even mid-trip).
+3. Call `log_expense` with `source="manual"` (and `currency` when it is
+   not SGD). The tool sends the confirmation bubble automatically.
 4. **Emit an EMPTY assistant reply** when the result shows `bubble_sent:
    true`. Not "Done.", not "Logged.", not a period — nothing. The bubble
    IS the confirmation. (See HARD RULES #1.)
@@ -724,7 +782,7 @@ When those conditions hold:
 2. If the reply mentions specific transactions (explicit txn_id, or
    "that $45 dinner", which you can map via context), pass them in
    `txn_ids_referenced` comma-separated.
-3. If 1-3 obvious tags stand out (`sam`, `work`, `regret`, `promo`,
+3. If 1-3 obvious tags stand out (`nabs`, `work`, `regret`, `promo`,
    etc.), pass them in `tags` comma-separated. Don't force tags — empty
    is fine.
 4. Acknowledge briefly, one short line: `📓 Saved.` No summary, no
@@ -757,8 +815,12 @@ from the Sunday 10 PM weekly sweep cron.
 2. If `status == "error"`, the WebhookLog tab doesn't exist yet — say so in
    one line. The fix is deploying the updated Apps Script; don't guess.
 3. If `missed_count == 0`, reply one short line: `✅ No missed transactions
-   in the last N days.` (For the weekly cron: produce an EMPTY reply instead
-   — do NOT message the user when there's nothing to report.)
+   in the last N days.` (For the weekly CRON run: reply with exactly
+   `[SILENT]` and nothing else — do NOT message the user when there's
+   nothing to report. `[SILENT]` is the cron lane's silence token; an empty
+   response there is booked as a job failure. This applies to CRON only —
+   on the Telegram and webhook lanes `bubble_sent: true` still means an
+   EMPTY assistant reply, per HARD RULES #1.)
 4. If `missed_count > 0`, present each missed row on its own short line
    with `date`, `merchant`, `amount`, `payment_method`. Keep it scannable —
    bullet lines, not a table. Ask the user which to log.

@@ -5,7 +5,7 @@
 -- Regenerate with:  python supabase/build_schema.py
 --
 -- Every file in supabase/migrations/ concatenated in run order, so a fresh
--- install is one paste into the Supabase SQL editor instead of 7.
+-- install is one paste into the Supabase SQL editor instead of 8.
 --
 -- The numbered migrations remain the source of truth. A database that
 -- already exists has run them one at a time, so a new schema change is
@@ -29,6 +29,7 @@
 --   0005_loans.sql
 --   0006_sub_overrides.sql
 --   0007_cards_base_mpd.sql
+--   0008_category_meta.sql
 -- =========================================================================
 
 -- =========================================================================
@@ -38,13 +39,12 @@
 -- ============================================================================
 -- 0001_init.sql — Supabase schema for the Kevin expense tracker
 --
--- The core schema: twelve tables, the txn-id minting function, and
--- row-level security. Run once in the Supabase SQL Editor — or paste
--- supabase/schema.sql instead, which is this file plus every later
--- migration in one go. Idempotent-ish: uses IF NOT EXISTS where Postgres
--- allows it, so it is safe to re-run.
+-- Mirrors the 11-tab Google Sheet schema (supabase/migrations/0001_init.sql, v6)
+-- plus the Time column added 2026-07-27 for the idempotency time-component
+-- fix. Run once in the Supabase SQL Editor. Idempotent-ish: uses IF NOT
+-- EXISTS where Postgres allows it; safe to re-run on a fresh project.
 --
--- Design notes:
+-- Design notes (docs in repo memory / PR body):
 --   * transactions.idempotency_key UNIQUE → dedup becomes ATOMIC at insert
 --     (ON CONFLICT DO NOTHING), killing the read-then-write race the Sheet
 --     path has. NULLs never collide, so legacy rows without keys are fine.
@@ -207,7 +207,7 @@ create table if not exists trip_nudge_log (
 );
 
 -- --- row-level security -----------------------------------------------------
--- One reader: Hadi, authenticated via Supabase Auth magic link in the PWA.
+-- One reader: the owner, authenticated via Supabase Auth magic link in the PWA.
 -- The agent's service key bypasses RLS entirely. No write policies exist:
 -- anon/authenticated clients cannot mutate anything.
 
@@ -306,7 +306,7 @@ exception when duplicate_object then null; end $$;
 -- the agent ("that $50 PayLah to Sarah was a loan"); repayment flips
 -- status to 'repaid' and the agent logs an offsetting NEGATIVE
 -- transactions row (category "Lending") so monthly totals self-correct —
--- Hadi chose the offset-txn design explicitly over excluding Lending from
+-- the owner chose the offset-txn design explicitly over excluding Lending from
 -- reports. txn_id links the outflow ledger row ('' for cash loans with no
 -- bank alert); repay_txn_id links the negative offset row once repaid.
 --
@@ -349,7 +349,7 @@ exception when duplicate_object then null; end $$;
 -- =========================================================================
 
 -- PWA subscriptions section: the detector is deterministic and
--- category-blind, so some genuinely-recurring charges are things Hadi
+-- category-blind, so some genuinely-recurring charges are things the owner
 -- does not consider subscriptions — insurance premiums, Atome split
 -- payments (finite instalments no algorithm can see the end of), a
 -- monthly haircut with a steady price. A dismissal (the row's ✕) is a
@@ -408,3 +408,64 @@ update cards set base_mpd = 0.4 where card_id = 'uob-pref';
 update cards set base_mpd = 0.4 where card_id = 'hsbc-revo';
 update cards set base_mpd = 0.1 where card_id = 'dbs-yuu';
 update cards set base_mpd = 0   where card_id = 'cash-paylah';
+
+-- =========================================================================
+-- 0008_category_meta.sql
+-- =========================================================================
+
+-- 0008: category_meta — which budget categories are FIXED monthly bills.
+--
+-- Why: the 21:00 review and Friday summary listed every category over 80%,
+-- so iCloud $4/$4, Spotify $12/$12, Insurance $61/$61 showed as 🔴 every
+-- single day (the owner, 2026-08-17: "I don't need reminding that subscriptions
+-- are at $6/$7"). A fixed bill at 100% is the expected state; the ONLY
+-- interesting signal from a fixed category is when it comes in OVER its
+-- budget (a price increase or a double charge). This table is the
+-- deterministic source of that distinction — get_spending_summary reads it
+-- and stamps `kind` on every row; the prompts render, never decide.
+--
+-- Run BY HAND in the Supabase SQL editor. Code degrades gracefully
+-- pre-migration: absent table → every category reads as `variable`
+-- (today's behavior).
+
+create table if not exists category_meta (
+  category    text primary key,
+  kind        text not null check (kind in ('fixed', 'variable')),
+  created_at  timestamptz not null default now()
+);
+
+alter table category_meta enable row level security;
+
+do $$ begin
+  create policy owner_read on category_meta
+    for select to authenticated using (is_owner());
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy owner_write on category_meta
+    for insert to authenticated with check (is_owner());
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy owner_update on category_meta
+    for update to authenticated using (is_owner()) with check (is_owner());
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy owner_delete on category_meta
+    for delete to authenticated using (is_owner());
+exception when duplicate_object then null; end $$;
+
+-- Seed: an EXAMPLE of fixed monthly bills. These are illustrative names —
+-- replace them with your own fixed categories (the exact names you use in
+-- the budgets table). Anything NOT listed here is `variable`. Match is
+-- case-insensitive on the exact category name. Skipping this block is safe:
+-- everything reads as variable, so the evening review lists your
+-- subscriptions at 100%.
+insert into category_meta (category, kind) values
+  ('Spotify', 'fixed'),
+  ('iCloud', 'fixed'),
+  ('Insurance', 'fixed'),
+  ('Phone Bill', 'fixed'),
+  ('Bills & Utilities', 'fixed')
+on conflict (category) do nothing;

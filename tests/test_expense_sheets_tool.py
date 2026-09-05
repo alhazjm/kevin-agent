@@ -41,6 +41,9 @@ def mock_sheets_client():
             ],
             "txn_id": "txn_20260414_001",
         }
+        # Near-dup advisory defaults to "no sibling found" — a bare
+        # MagicMock is truthy and would fire the ⚠️ branch in every test.
+        mock.find_near_duplicate.return_value = None
         mock.ensure_category_exists.return_value = {"status": "exists", "category": "Food & Dining"}
         mock.update_budget_row.return_value = {
             "status": "ok",
@@ -128,6 +131,7 @@ class TestLogExpense:
             notes="",
             txn_time="",
             create_category=False,
+            idempotency_key="",
         )
 
     def test_defaults_to_today(self, mock_sheets_client):
@@ -725,6 +729,77 @@ class TestLogExpenseDuplicate:
             "category": "Personal - Food & Drinks",
         }))
         assert result["txn_id"] == "txn_20260416_002"
+
+
+class TestLogExpenseNearDuplicate:
+    """The 2026-08-02 Gojek pair: a bank double-alert drifts the
+    timestamp, time-in-key correctly mints distinct keys, so the bubble
+    carries an advisory ⚠️ instead of a hard block — inside the SAME
+    bubble (silence contract), after the row's own txn_id."""
+
+    def test_near_dup_warns_in_bubble_and_result(self, mock_sheets_client):
+        import re as _re
+        from tools.expense_sheets_tool import handle_log_expense
+
+        mock_sheets_client.find_near_duplicate.return_value = {
+            "txn_id": "txn_20260802_003", "txn_time": "15:21"}
+        fake_send = {"ok": True, "message_id": "555"}
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}):
+            with patch("tools.expense_sheets_tool._send_telegram_bubble",
+                       return_value=fake_send) as mock_send:
+                result = json.loads(handle_log_expense({
+                    "merchant": "Gopay-Gojek",
+                    "amount": 17.60,
+                    "category": "Food & Dining",
+                    "time": "15:22",
+                }))
+        assert result["status"] == "ok"
+        assert result["possible_duplicate_of"] == "txn_20260802_003"
+        bubble = mock_send.call_args[0][0]
+        assert "⚠️" in bubble
+        assert "txn_20260802_003" in bubble
+        # The reply-to-edit fallback parses the FIRST txn id in the bubble
+        # — it must be the new row's own id, not the sibling's.
+        first = _re.search(r"txn_\d{8}_\d{3}", bubble)
+        assert first.group(0) == "txn_20260414_001"
+        # Still the silent flow — one bubble, no extra agent text.
+        assert result["assistant_reply_required"] is False
+
+    def test_no_near_dup_no_warning(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        fake_send = {"ok": True, "message_id": "556"}
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}):
+            with patch("tools.expense_sheets_tool._send_telegram_bubble",
+                       return_value=fake_send) as mock_send:
+                result = json.loads(handle_log_expense({
+                    "merchant": "Starbucks",
+                    "amount": 15.50,
+                    "category": "Food & Dining",
+                }))
+        assert "possible_duplicate_of" not in result
+        assert "⚠️" not in mock_send.call_args[0][0]
+
+    def test_lookup_failure_never_breaks_logging(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        mock_sheets_client.find_near_duplicate.side_effect = RuntimeError("boom")
+        result = json.loads(handle_log_expense({
+            "merchant": "Starbucks",
+            "amount": 15.50,
+            "category": "Food & Dining",
+        }))
+        assert result["status"] == "ok"
+        assert "possible_duplicate_of" not in result
+
+    def test_payload_idempotency_key_passed_through(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        json.loads(handle_log_expense({
+            "merchant": "Gopay-Gojek",
+            "amount": 17.60,
+            "category": "Food & Dining",
+            "idempotency_key": "723eb8e6eefe6208",
+        }))
+        call_kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert call_kwargs["idempotency_key"] == "723eb8e6eefe6208"
 
 
 class TestSubstringMatching:
@@ -2662,6 +2737,379 @@ class TestLogExpensePending:
         mock_sheets_client.ensure_category_exists.assert_called_with("UNCATEGORIZED")
 
 
+class TestFxToSgd:
+    """_fx_to_sgd — stdlib urllib against frankfurter, dated → latest
+    fallback, never raises. The note mirrors Code.gs's origNote format."""
+
+    @staticmethod
+    def _resp(payload: dict):
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(payload).encode("utf-8")
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        return resp
+
+    def test_dated_success(self):
+        from tools.expense_sheets_tool import _fx_to_sgd
+        payload = {"base": "MYR", "date": "2026-08-13", "rates": {"SGD": 0.31322}}
+        with patch("tools.expense_sheets_tool.urllib.request.urlopen",
+                   return_value=self._resp(payload)) as mock_open:
+            r = _fx_to_sgd(33, "myr", "2026-08-13")
+        assert r["ok"] is True
+        assert r["amount"] == 10.34
+        assert r["rate"] == 0.31322
+        assert r["fx_date"] == "2026-08-13"
+        assert r["note"] == "orig: MYR 33.00 @ 0.313220 (frankfurter 2026-08-13)"
+        req = mock_open.call_args[0][0]
+        assert req.full_url == "https://api.frankfurter.dev/v1/2026-08-13?base=MYR&symbols=SGD"
+        assert req.get_header("User-agent") == "kevin-agent/1.0"
+        assert mock_open.call_args[1]["timeout"] == 10
+
+    def test_dated_fails_falls_back_to_latest(self):
+        from tools.expense_sheets_tool import _fx_to_sgd
+        err = urllib.error.HTTPError("u", 404, "not found", {}, None)
+        payload = {"base": "MYR", "date": "2026-08-14", "rates": {"SGD": 0.31}}
+        with patch("tools.expense_sheets_tool.urllib.request.urlopen",
+                   side_effect=[err, self._resp(payload)]) as mock_open, \
+             patch("tools.expense_sheets_tool.time.sleep"):
+            r = _fx_to_sgd(100, "MYR", "2026-08-13")
+        assert r["ok"] is True
+        assert r["amount"] == 31.0
+        urls = [c[0][0].full_url for c in mock_open.call_args_list]
+        assert urls[0].endswith("/v1/2026-08-13?base=MYR&symbols=SGD")
+        assert urls[1].endswith("/v1/latest?base=MYR&symbols=SGD")
+
+    def test_all_fail_returns_ok_false(self):
+        from tools.expense_sheets_tool import _fx_to_sgd
+        with patch("tools.expense_sheets_tool.urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("boom")), \
+             patch("tools.expense_sheets_tool.time.sleep") as mock_sleep:
+            r = _fx_to_sgd(33, "MYR", "2026-08-13")
+        assert r["ok"] is False
+        assert "boom" in r["error"]
+        # 3 attempts per URL, 2 URLs → backoff slept between attempts.
+        assert mock_sleep.call_count == 4
+
+    def test_sgd_passthrough_no_network(self):
+        from tools.expense_sheets_tool import _fx_to_sgd
+        with patch("tools.expense_sheets_tool.urllib.request.urlopen") as mock_open:
+            r = _fx_to_sgd(12.345, "sgd", "2026-08-13")
+        assert r == {"ok": True, "amount": 12.35, "rate": 1.0, "fx_date": "", "note": ""}
+        mock_open.assert_not_called()
+
+
+class TestLogExpenseTripRouting:
+    """FX-in-tool + deterministic trip routing inside handle_log_expense."""
+
+    ACTIVE = {
+        "active": True, "as_of": "2026-04-30", "label": "ID Apr 2026",
+        "trip_category": "Travel - ID 2026-04", "budget_map": {"food": 450.0},
+        "total_budget": 2000.0, "notes": "", "overlap_warning": None,
+    }
+    INACTIVE = {"active": False, "as_of": "2026-04-30", "all_rows_count": 0}
+
+    @pytest.fixture(autouse=True)
+    def _travel_db(self):
+        # route_for_trip consults category_meta (fixed-bill guard) and
+        # resolve_category (the trip category must be a real budgets row).
+        # Default: no fixed bills, every category resolves to itself.
+        from tools import travel_mode
+        db = MagicMock()
+        db.read_category_kinds.return_value = {}
+        db.resolve_category.side_effect = lambda c: {"match": c}
+        db._normalize_category.side_effect = lambda s: str(s or "").strip().casefold()
+        with patch.object(travel_mode, "supabase_client", db):
+            self.travel_db = db
+            yield db
+
+    def test_route_to_trip_false_opts_out(self, mock_sheets_client):
+        from tools import travel_mode
+        from tools.expense_sheets_tool import handle_log_expense
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.ACTIVE), \
+             patch.object(travel_mode, "route_for_trip") as mock_route:
+            result = json.loads(handle_log_expense({
+                "merchant": "AMAZON.SG", "amount": 40.0,
+                "category": "Personal - Misc / clothes / disc. Buy",
+                "payment_method": "YouTrip Card", "route_to_trip": False,
+            }))
+        assert result["status"] == "ok"
+        assert "trip_routed" not in result
+        mock_route.assert_not_called()
+        kw = mock_sheets_client.append_transaction.call_args.kwargs
+        assert kw["category"] == "Personal - Misc / clothes / disc. Buy"
+
+    def test_non_sgd_converts_stamps_orig_then_routes(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        from tools import travel_mode
+        mock_sheets_client.append_transaction.return_value = {
+            "status": "ok",
+            "row": ["2026-04-30", "Warung", 10.34, "SGD", "Travel - ID 2026-04",
+                    "manual", "", "", "txn_20260430_001", ""],
+            "txn_id": "txn_20260430_001",
+        }
+        fx = {"ok": True, "amount": 10.34, "rate": 0.31322, "fx_date": "2026-04-30",
+              "note": "orig: MYR 33.00 @ 0.313220 (frankfurter 2026-04-30)"}
+        with patch("tools.expense_sheets_tool._fx_to_sgd", return_value=fx) as mock_fx, \
+             patch.object(travel_mode, "get_active_travel_mode", return_value=self.ACTIVE), \
+             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}), \
+             patch("tools.expense_sheets_tool._send_telegram_bubble",
+                   return_value={"ok": True, "message_id": "77"}) as mock_send:
+            result = json.loads(handle_log_expense({
+                "merchant": "Warung", "amount": 33, "currency": "MYR",
+                "category": "Personal - Food & Drinks", "date": "2026-04-30",
+                "notes": "lunch",
+            }))
+        mock_fx.assert_called_once_with(33.0, "MYR", "2026-04-30")
+        kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert kwargs["amount"] == 10.34
+        assert kwargs["currency"] == "SGD"
+        assert kwargs["category"] == "Travel - ID 2026-04"
+        assert kwargs["notes"] == (
+            "[bucket:food] lunch; orig: MYR 33.00 @ 0.313220 (frankfurter 2026-04-30)")
+        assert result["status"] == "ok"
+        assert result["trip_routed"] == {
+            "trip_label": "ID Apr 2026",
+            "from_category": "Personal - Food & Drinks",
+            "to_category": "Travel - ID 2026-04",
+            "bucket": "food",
+            "signal": "orig",
+        }
+        bubble = mock_send.call_args[0][0]
+        assert "SGD 10.34" in bubble
+        assert "Travel - ID 2026-04" in bubble
+        assert result["bubble_sent"] is True
+
+    def test_fx_failed_writes_nothing_and_no_bubble(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        with patch("tools.expense_sheets_tool._fx_to_sgd",
+                   return_value={"ok": False, "error": "HTTP 500 for MYR"}), \
+             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}), \
+             patch("tools.expense_sheets_tool._send_telegram_bubble") as mock_send:
+            result = json.loads(handle_log_expense({
+                "merchant": "Warung", "amount": 33, "currency": "MYR",
+                "category": "Personal - Food & Drinks", "date": "2026-04-30",
+            }))
+        assert result["status"] == "error"
+        assert result["reason"] == "fx_failed"
+        assert "MYR 33.00" in result["message"]
+        assert "nothing logged" in result["message"]
+        mock_sheets_client.append_transaction.assert_not_called()
+        mock_send.assert_not_called()
+        assert "assistant_reply_required" not in result
+
+    def test_email_payload_with_orig_is_not_reconverted(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        from tools import travel_mode
+        with patch("tools.expense_sheets_tool._fx_to_sgd") as mock_fx, \
+             patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.INACTIVE):
+            handle_log_expense({
+                "merchant": "GOJEK", "amount": 4.10, "currency": "SGD",
+                "category": "Personal - Travel", "date": "2026-04-30",
+                "notes": "orig: MYR 13.10 @ 0.313 (frankfurter 2026-04-30)",
+                "source": "email",
+            })
+        mock_fx.assert_not_called()
+
+    def test_youtrip_during_trip_routes_to_trip_category(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        from tools import travel_mode
+        mock_sheets_client.append_transaction.return_value = {
+            "status": "ok",
+            "row": ["2026-04-30", "Warung Kopi", 5.20, "SGD", "Travel - ID 2026-04",
+                    "email", "YouTrip", "[bucket:food]", "txn_20260430_002", ""],
+            "txn_id": "txn_20260430_002",
+        }
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.ACTIVE) as mock_active, \
+             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}), \
+             patch("tools.expense_sheets_tool._send_telegram_bubble",
+                   return_value={"ok": True, "message_id": "78"}) as mock_send:
+            result = json.loads(handle_log_expense({
+                "merchant": "Warung Kopi", "amount": 5.20, "currency": "SGD",
+                "category": "Personal - Food & Drinks", "date": "2026-04-30",
+                "payment_method": "YouTrip", "source": "email",
+                "time": "12:01", "idempotency_key": "abcdef0123456789",
+            }))
+        mock_active.assert_called_with(as_of="2026-04-30")
+        kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert kwargs["category"] == "Travel - ID 2026-04"
+        assert kwargs["notes"] == "[bucket:food]"
+        assert kwargs["payment_method"] == "YouTrip"
+        assert kwargs["txn_time"] == "12:01"
+        assert kwargs["idempotency_key"] == "abcdef0123456789"
+        assert result["trip_routed"]["signal"] == "youtrip"
+        assert result["trip_routed"]["bucket"] == "food"
+        assert result["trip_routed"]["from_category"] == "Personal - Food & Drinks"
+        assert result["trip_routed"]["to_category"] == "Travel - ID 2026-04"
+        assert "Travel - ID 2026-04" in mock_send.call_args[0][0]
+
+    def test_sgd_no_signal_during_trip_unchanged(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        from tools import travel_mode
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.ACTIVE):
+            result = json.loads(handle_log_expense({
+                "merchant": "Shopee", "amount": 25.00, "currency": "SGD",
+                "category": "Personal - Others", "date": "2026-04-30",
+                "payment_method": "DBS/POSB card ending 1234", "notes": "",
+            }))
+        kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert kwargs["category"] == "Personal - Others"
+        assert kwargs["notes"] == ""
+        assert "trip_routed" not in result
+
+    def test_no_active_trip_unchanged(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        from tools import travel_mode
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.INACTIVE):
+            result = json.loads(handle_log_expense({
+                "merchant": "Warung Kopi", "amount": 5.20, "currency": "SGD",
+                "category": "Personal - Food & Drinks", "date": "2026-04-30",
+                "payment_method": "YouTrip",
+            }))
+        kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert kwargs["category"] == "Personal - Food & Drinks"
+        assert "trip_routed" not in result
+
+    def test_router_exception_never_breaks_logging(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense
+        from tools import travel_mode
+        with patch.object(travel_mode, "route_for_trip",
+                          side_effect=RuntimeError("boom")):
+            result = json.loads(handle_log_expense({
+                "merchant": "Warung Kopi", "amount": 5.20,
+                "category": "Personal - Food & Drinks", "date": "2026-04-30",
+                "payment_method": "YouTrip",
+            }))
+        assert result["status"] == "ok"
+        assert "trip_routed" not in result
+
+
+class TestLogExpensePendingTripRouting:
+    """During an active trip a signalled spend skips the ask-prompt and is
+    logged straight into the trip category ([bucket:misc], normal bubble)."""
+
+    ACTIVE = TestLogExpenseTripRouting.ACTIVE
+    INACTIVE = TestLogExpenseTripRouting.INACTIVE
+
+
+    @pytest.fixture(autouse=True)
+    def _travel_db(self):
+        # route_for_trip consults category_meta (fixed-bill guard) and
+        # resolve_category (the trip category must be a real budgets row).
+        # Default: no fixed bills, every category resolves to itself.
+        from tools import travel_mode
+        db = MagicMock()
+        db.read_category_kinds.return_value = {}
+        db.resolve_category.side_effect = lambda c: {"match": c}
+        db._normalize_category.side_effect = lambda s: str(s or "").strip().casefold()
+        with patch.object(travel_mode, "supabase_client", db):
+            self.travel_db = db
+            yield db
+    def test_signal_delegates_to_log_expense_normal_bubble(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense_pending
+        from tools import travel_mode
+        mock_sheets_client.append_transaction.return_value = {
+            "status": "ok",
+            "row": ["2026-04-30", "7-ELEVEN", 3.10, "SGD", "Travel - ID 2026-04",
+                    "email", "YouTrip", "[bucket:misc]", "txn_20260430_003", ""],
+            "txn_id": "txn_20260430_003",
+        }
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.ACTIVE), \
+             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}), \
+             patch("tools.expense_sheets_tool._send_telegram_bubble",
+                   return_value={"ok": True, "message_id": "80"}) as mock_send:
+            result = json.loads(handle_log_expense_pending({
+                "merchant": "7-ELEVEN", "amount": 3.10, "currency": "SGD",
+                "date": "2026-04-30", "payment_method": "YouTrip",
+                "source": "email", "time": "09:00",
+                "options": ["Personal - Food & Drinks", "Groceries"],
+            }))
+        kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert kwargs["category"] == "Travel - ID 2026-04"
+        assert kwargs["notes"] == "[bucket:misc]"
+        assert kwargs["txn_time"] == "09:00"
+        assert kwargs["source"] == "email"
+        mock_sheets_client.ensure_category_exists.assert_not_called()
+        assert result["status"] == "ok"
+        assert result["pending_skipped"] is True
+        assert "pending" not in result
+        assert result["trip_routed"] == {
+            "trip_label": "ID Apr 2026",
+            "from_category": "UNCATEGORIZED",
+            "to_category": "Travel - ID 2026-04",
+            "bucket": "misc",
+            "signal": "youtrip",
+        }
+        bubble = mock_send.call_args[0][0]
+        assert "which category?" not in bubble
+        assert "Logged SGD 3.10" in bubble
+        assert result["bubble_sent"] is True
+        assert result["assistant_reply_required"] is False
+
+    def test_no_signal_asks_as_before(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense_pending
+        from tools import travel_mode
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.ACTIVE), \
+             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}), \
+             patch("tools.expense_sheets_tool._send_telegram_bubble",
+                   return_value={"ok": True, "message_id": "81"}) as mock_send:
+            result = json.loads(handle_log_expense_pending({
+                "merchant": "Shopee", "amount": 30.00, "currency": "SGD",
+                "date": "2026-04-30", "payment_method": "DBS/POSB card ending 1234",
+                "options": ["Personal - Others", "Groceries"],
+            }))
+        kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert kwargs["category"] == "UNCATEGORIZED"
+        assert result["pending"] is True
+        assert "which category?" in mock_send.call_args[0][0]
+        assert "trip_routed" not in result
+
+    def test_fx_failed_writes_nothing(self, mock_sheets_client):
+        from tools.expense_sheets_tool import handle_log_expense_pending
+        with patch("tools.expense_sheets_tool._fx_to_sgd",
+                   return_value={"ok": False, "error": "timed out"}), \
+             patch("tools.expense_sheets_tool._send_telegram_bubble") as mock_send:
+            result = json.loads(handle_log_expense_pending({
+                "merchant": "Warung", "amount": 20, "currency": "THB",
+                "date": "2026-04-30", "options": ["Personal - Food & Drinks"],
+            }))
+        assert result["status"] == "error"
+        assert result["reason"] == "fx_failed"
+        mock_sheets_client.append_transaction.assert_not_called()
+        mock_send.assert_not_called()
+
+    def test_manual_foreign_no_trip_converts_then_asks(self, mock_sheets_client):
+        # No active trip: FX still runs (orig: stamped) and the ask-prompt
+        # goes out on the SGD amount.
+        from tools.expense_sheets_tool import handle_log_expense_pending
+        from tools import travel_mode
+        fx = {"ok": True, "amount": 0.82, "rate": 0.041, "fx_date": "2026-04-30",
+              "note": "orig: THB 20.00 @ 0.041000 (frankfurter 2026-04-30)"}
+        with patch("tools.expense_sheets_tool._fx_to_sgd", return_value=fx), \
+             patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=self.INACTIVE), \
+             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "fake-token"}), \
+             patch("tools.expense_sheets_tool._send_telegram_bubble",
+                   return_value={"ok": True, "message_id": "82"}) as mock_send:
+            result = json.loads(handle_log_expense_pending({
+                "merchant": "Warung", "amount": 20, "currency": "THB",
+                "date": "2026-04-30", "options": ["Personal - Food & Drinks"],
+            }))
+        kwargs = mock_sheets_client.append_transaction.call_args[1]
+        assert kwargs["amount"] == 0.82
+        assert kwargs["currency"] == "SGD"
+        assert kwargs["notes"] == "orig: THB 20.00 @ 0.041000 (frankfurter 2026-04-30)"
+        assert kwargs["category"] == "UNCATEGORIZED"
+        assert result["pending"] is True
+        assert "SGD 0.82" in mock_send.call_args[0][0]
+
+
 class TestJournalTools:
     """Tests for append_journal_entry / get_journal_entries — the
     reply=journal experiment surface."""
@@ -2767,7 +3215,7 @@ class TestIdempotencyKeyParity:
         # different keys - the KOPITIAM $7.80 incident, 2026-07-25
         ("2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "16:18", "5fa19a03294bdad9"),
         ("2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "19:47", "ad27b42f9385c92a"),
-        ("2026-07-24", "ACME CLOUD SERVICES", 27.40, "DBS/POSB card ending 4321", "21:03:11", "a5e4ac6b14c02f1d"),
+        ("2026-07-24", "Anthropic, PBC", 27.40, "DBS/POSB card ending 4321", "21:03:11", "57042d4fa9389e56"),
     ]
 
     def test_python_pins_match_expected(self):
@@ -3091,6 +3539,77 @@ class TestMirrorRetired:
         json.loads(handle_delete_expense({"txn_id": "txn_20260414_001"}))
         mock_sheets_client.sheet.edit_transaction.assert_not_called()
         mock_sheets_client.sheet.delete_transaction.assert_not_called()
+
+
+class TestWriteSheetSnapshotRetry:
+    """write_sheet_snapshot's six write-side round-trips retry transient
+    Google 429/5xx (the 2026-08-16 03:00 '[503]: The service is currently
+    unavailable' alert) and fail fast on 4xx."""
+
+    def _api_error(self, status):
+        import gspread
+        exc = gspread.exceptions.APIError.__new__(gspread.exceptions.APIError)
+        exc.response = MagicMock(status_code=status)
+        Exception.__init__(exc, f"[{status}]")
+        return exc
+
+    def _spreadsheet(self):
+        ws = MagicMock(); bs = MagicMock()
+        ss = MagicMock()
+        ss.worksheet.side_effect = lambda name: ws if name == "Transactions" else bs
+        return ss, ws, bs
+
+    def test_503_on_update_is_retried_and_succeeds(self):
+        from tools import sheets_client
+        ss, ws, bs = self._spreadsheet()
+        ws.update.side_effect = [self._api_error(503), None]
+        with patch("tools.sheets_client.get_spreadsheet", return_value=ss), \
+             patch("tools.sheets_client.time.sleep") as mock_sleep:
+            result = sheets_client.write_sheet_snapshot([["r"] * 12], [["Category"]])
+        assert result["status"] == "ok"
+        assert ws.update.call_count == 2
+        assert ws.clear.call_count == 1
+        mock_sleep.assert_called_once_with(1.0)      # 1s, then success
+
+    def test_503_on_worksheet_lookup_is_retried(self):
+        from tools import sheets_client
+        ss, ws, bs = self._spreadsheet()
+        calls = {"n": 0}
+        def flaky(name):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise self._api_error(503)
+            return ws if name == "Transactions" else bs
+        ss.worksheet.side_effect = flaky
+        with patch("tools.sheets_client.get_spreadsheet", return_value=ss), \
+             patch("tools.sheets_client.time.sleep"):
+            result = sheets_client.write_sheet_snapshot([], [["Category"]])
+        assert result["status"] == "ok"
+        assert calls["n"] == 3      # 1 failed + Transactions + Budget
+
+    def test_4xx_is_not_retried(self):
+        import gspread
+        from tools import sheets_client
+        ss, ws, bs = self._spreadsheet()
+        ws.clear.side_effect = self._api_error(403)
+        with patch("tools.sheets_client.get_spreadsheet", return_value=ss), \
+             patch("tools.sheets_client.time.sleep") as mock_sleep, \
+             pytest.raises(gspread.exceptions.APIError):
+            sheets_client.write_sheet_snapshot([], [["Category"]])
+        assert ws.clear.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_persistent_503_gives_up_after_four_attempts(self):
+        import gspread
+        from tools import sheets_client
+        ss, ws, bs = self._spreadsheet()
+        ws.update.side_effect = self._api_error(503)
+        with patch("tools.sheets_client.get_spreadsheet", return_value=ss), \
+             patch("tools.sheets_client.time.sleep") as mock_sleep, \
+             pytest.raises(gspread.exceptions.APIError):
+            sheets_client.write_sheet_snapshot([], [["Category"]])
+        assert ws.update.call_count == 4
+        assert [c.args[0] for c in mock_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 class TestExportSheetBackup:

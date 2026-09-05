@@ -284,7 +284,7 @@ BACKFILL_SCHEMA = {
 - [ ] Apps Script needs `SPREADSHEET_ID` in script properties (for WebhookLog writes)
 
 ### Phase 1: Webhook Audit Log
-1. Add the `webhook_log` schema to `supabase/migrations/`
+1. Add `WebhookLog` tab schema to `supabase/migrations/0001_init.sql`
 2. Update `apps-script/Code.gs` with `logToAuditSheet()` and `computeIdempotencyKey()`
 3. Update `sendWebhook()` to mark status as `sent` or `error` after the call
 4. Test: manually trigger Apps Script, verify row appears in WebhookLog

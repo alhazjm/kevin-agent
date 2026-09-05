@@ -241,7 +241,7 @@ section{padding:30px 24px 0}
   border:1px dashed var(--hairS); border-radius:8px; background:none; color:var(--ink)}
 /* mobile: hairline dividers ahead of the stacked info sections — the
    borderless flow made IOU / subscriptions / activity read as one blur
-   (Hadi, 2026-08-01). Content-inset like #insightrule; desktop keeps
+   (the owner, 2026-08-01). Content-inset like #insightrule; desktop keeps
    its boxed outlines instead (the min-width block). */
 @media (max-width: 979px){
   #ioublock::before,#subsblock::before{content:""; display:block; height:1px;
@@ -294,7 +294,7 @@ section{padding:30px 24px 0}
 /* The tile's big number + dates are STATEMENT-cycle (what the bank app
    shows); every meter below is calendar-month reward math (pools, caps,
    partner spend, min-spends). One zone label states that once, instead
-   of "cal." noise on every caption — Hadi 2026-07-31, "less confusing". */
+   of "cal." noise on every caption — the owner 2026-07-31, "less confusing". */
 .card .mdiv{margin-top:8px; padding-top:5px; border-top:1px solid var(--mc-bar-track);
   font-size:8px; font-weight:650; letter-spacing:.12em; text-transform:uppercase;
   color:var(--mc-t-muted); max-width:100%; white-space:nowrap}
@@ -594,7 +594,7 @@ const fmt0 = n => (n < 0 ? "-$" : "$") + Math.round(Math.abs(n)).toLocaleString(
 /* limits keep their cents when they have any — fmt0's rounding showed a
    $3.98 iCloud limit as "$4", making a correct 100%-used red row look
    like a false alarm next to Spotify's real $12.00 at 99.8% amber
-   (Hadi, 2026-07-31) */
+   (the owner, 2026-07-31) */
 const fmtLimit = n => Number.isInteger(n) ? fmt0(n) : fmt(n);
 const slug = c => "bud-" + c.toLowerCase().replace(/[^a-z0-9]+/g,"-");
 /* LOCAL wall-clock date, never UTC. toISOString() renders UTC, which is
@@ -674,12 +674,12 @@ const LIVERY_ID = {
 const LIVERY_FALLBACK = { band:"paper", base:"oklch(0.955 0.005 250)", motif:"plain" };
 
 /* Cash·PayLah is not a catalogue card — a quiet POSB-blue paper tile
-   (Hadi: "muted blue of the posb colour"). Same record shape as the
+   (the owner: "muted blue of the posb colour"). Same record shape as the
    fallback, so it flows through cardCssText unchanged. */
 const CASH_LIVERY = { band:"paper", base:"oklch(0.905 0.05 262)", motif:"plain" };
 
 /* Cash pseudo-card: PayLah! debit spending on a calendar-month window
-   (cycle day 1 → the 1st-to-EOM tracking Hadi asked for). Deliberately NOT
+   (cycle day 1 → the 1st-to-EOM tracking the owner asked for). Deliberately NOT
    a row in the cards table — the card optimiser must keep skipping PayLah
    as unmapped_payment_method; this tile is a PWA-side view only. It rides
    the normal card pipeline (cycle window, spend calc, tape filter) and
@@ -817,7 +817,7 @@ function calc(){
     (t.source||"").toLowerCase() !== "backfill").length;
   // AGGREGATE spend counts every row — pending included. An uncategorized
   // transaction is still money that left the account; excluding it
-  // overstated "Left to spend" by the whole pending pile (Hadi,
+  // overstated "Left to spend" by the whole pending pile (the owner,
   // 2026-07-31: "the chart is understating… does that help my
   // spending?" — it didn't). Transfers (YouTrip top-ups) stay counted:
   // the top-up is THE outflow moment and the single counting point
@@ -831,7 +831,7 @@ function calc(){
 
   // YTD starts at the first month with data, not January: the ledger
   // began mid-year, and a flat-zero runway before it says nothing
-  // (Hadi, 2026-08-01: "i dont want to see jan when i know my jan txns
+  // (the owner, 2026-08-01: "i dont want to see jan when i know my jan txns
   // are not coming in"). Axis, series, and budget total all share it.
   let ytdStart = now.getMonth() + 1;
   if (ytd) for (const t of vTxns){
@@ -1026,7 +1026,7 @@ function renderPulse(C){
   // landing at 4.9999999999998 would otherwise render "$4.100"
   const totalCents = Math.round(Math.abs(left) * 100);
   const whole = Math.floor(totalCents / 100), cents = totalCents % 100;
-  // One over-budget alarm rule, applied consistently (Hadi 2026-07-31,
+  // One over-budget alarm rule, applied consistently (the owner 2026-07-31,
   // "colour alerts without changing it too much"): when the window's
   // budget is spent, the hero number + label, the "fully used" phrase,
   // and the chart's line/dot/spent-label all switch to --over. No
@@ -1223,7 +1223,7 @@ function renderBudgets(C){
     const flash = state.flashCat === b.cat;
     // "no budget set" means NO budgets row exists (unb). An explicit $0
     // limit is a real budget — any spending on it is over budget, and the
-    // row reads "$X / $0 · $X over" (Hadi 2026-07-31: "0 doesn't mean no
+    // row reads "$X / $0 · $X over" (the owner 2026-07-31: "0 doesn't mean no
     // budget set").
     const noBudget = !!b.unb;
     const zeroOver = !b.unb && b.limit === 0 && b.spent > 0;
@@ -1256,7 +1256,7 @@ function renderTrip(C){
   if (!C.trip) return;
   $("#trip-title").textContent = "TRIP · " + C.trip.label.toUpperCase();
   // once top-ups are tagged, the header reads funded vs planned; the
-  // funded figure goes red past the plan (Hadi's scenario: planned
+  // funded figure goes red past the plan (the owner's scenario: planned
   // $1,000, transferred $1,800 — both surfaces must show it)
   const planned = Number(C.trip.total_budget);
   $("#trip-agg").innerHTML = C.funded > 0
@@ -1330,7 +1330,7 @@ function calcSubs(){
   }
   const subs = [], cm = curMonthKey();
   for (const k in byM){
-    if (D.subExcl.has(k)) continue;      // dismissed by Hadi — for good
+    if (D.subExcl.has(k)) continue;      // dismissed by the owner — for good
     const list = byM[k], months = {};
     for (const t of list)
       (months[t.date.slice(0,7)] = months[t.date.slice(0,7)] || []).push(t);
@@ -1434,7 +1434,7 @@ function renderCards(C){
     if (cap > 0 && c.card_id === "uob-pref"){
       // Preferred runs TWO S$600 calendar-month pools (contactless /
       // online) — split by merchant class, same rules as the agent side.
-      // Layout per Hadi: meter, its caption, meter, its caption.
+      // Layout per the owner: meter, its caption, meter, its caption.
       const onl = c.spentCalOnline || 0;
       const tap = Math.max(0, c.spentCal - onl);
       // no inline margin when this is the stack's FIRST meter — the
@@ -1537,7 +1537,7 @@ function tapeData(C){
     emptyToday = !shown.length;
   }
   const groups = [];
-  // The total counts EVERY listed row — transfers included (Hadi,
+  // The total counts EVERY listed row — transfers included (the owner,
   // 2026-07-31: "isn't a transfer cash out & spend?" — yes; top-ups are
   // budgeted spend and the chart already counted them, so excluding
   // them here was the inconsistency). With pending also counted in the

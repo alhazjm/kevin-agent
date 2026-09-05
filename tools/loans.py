@@ -2,7 +2,7 @@
 
 Approved design: a `loans` Supabase table (migration 0005) tracks each IOU
 until repaid. Repayment logs an offsetting NEGATIVE ledger transaction
-(category "Lending") so monthly totals self-correct — Hadi chose the
+(category "Lending") so monthly totals self-correct — the owner chose the
 offset-txn design explicitly over excluding Lending from reports. The
 "Lending" budgets row auto-creates at $0 on first use; the PWA hides it
 from budget bars by design.

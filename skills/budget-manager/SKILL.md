@@ -1,7 +1,7 @@
 ---
 name: budget-manager
 description: Handles budget queries, warnings, reallocation, and the guilt-free calculator
-version: 3.0.0
+version: 3.1.0
 author: Hadi
 license: MIT
 platforms: [linux]
@@ -20,13 +20,33 @@ metadata:
 - The user asks "Can I afford X?"
 - The user wants to change a budget limit (including for a specific month)
 
+## Fixed vs variable (read this first)
+
+Every row from `get_remaining_budget` carries `kind`: `fixed` (subscriptions,
+insurance, utilities, phone — bills that land at ~100% every month by
+design) or `variable` (everything else). The two are treated differently
+EVERYWHERE in this skill:
+
+- A fixed bill sitting at 100% is its normal state — it is NEVER a warning,
+  never 🔴, never listed under "watch/over". Do not mention it.
+- A fixed bill matters only when it comes in OVER its usual amount (price
+  increase, double charge). The tool already detects that: it appears in
+  `_attention.fixed_over` and as a 🧾 line in `_attention.lines`.
+- Warnings are precomputed: `_attention.lines` = variable categories at
+  80%+ plus fixed bills over their usual amount. Print those lines
+  VERBATIM. Never re-derive warnings from the per-category rows, never add
+  categories the tool didn't flag.
+
 ## Budget Queries
 
 When the user asks "How much do I have left?" or sends `/budget`:
 
 1. Call `get_remaining_budget` with the relevant category (or all)
-2. Format clearly — sort by percent used (highest first), skip categories at 0% unless showing all
-3. Use traffic-light circles for status:
+2. Format clearly — VARIABLE categories sorted by percent used (highest
+   first), skip categories at 0% unless showing all. Fixed bills collapse
+   to a single line: `Fixed bills: N charged so far` (list them only if the
+   user asks about a specific one).
+3. Use traffic-light circles for status (variable rows only):
    - 🟢 Under 50% used
    - 🟡 50–80% used
    - 🔴 Over 80% used (add ⚠️)
@@ -34,28 +54,29 @@ When the user asks "How much do I have left?" or sends `/budget`:
 ```
 💰 Budget Status — April
 
-Variable:
   🔴 Food & Drinks   $245 left of $400 ⚠️ (80% used)
   🟡 Transport       $42 left of $75 (44% used)
   🟢 Groceries       $310 left of $500 (38% used)
 
-Fixed: all on track ✅
+Fixed bills: 6 charged so far, all at their usual amounts
 
 Total: $2,600 remaining of $3,300
 ```
 
 Keep numbers clean — round to whole dollars unless cents matter.
 
-## Budget Warnings
+## Budget Warnings (cron and on request)
 
-When any category exceeds 80% usage:
-- Flag it clearly with ⚠️ and 🔴
-- Show days remaining in the month for context
-- Suggest which categories have surplus
+Print `_attention.lines` verbatim — nothing else qualifies as a warning.
+When the list is empty, say so in one line ("Budgets: nothing to flag.").
+When it isn't, add days remaining in the month for context and, for a
+variable category, one concrete next step (a surplus to shift from, or a
+cap to set):
 
 ```
-⚠️ Food & Drinks at 85% ($340/$400) — 17 days left
+🔴 Food & Drinks: $340 / $400 (85%) — 17 days left
 💡 Entertainment only at 30% — could shift $50 if needed
+🧾 Spotify came in $0.98 over its usual $12.00 — price change or double charge?
 ```
 
 ## Budget Reallocation

@@ -1,7 +1,7 @@
 ---
 name: card-optimiser
 description: Recommends the best credit card per category, tracks monthly cap progress, and scores miles earned vs optimal
-version: 1.4.0
+version: 1.5.0
 author: Hadi
 license: MIT
 platforms: [linux]
@@ -32,7 +32,7 @@ rules, or the log_expense flow — they live in `skills/expense-tracker/SKILL.md
    and stop. Do NOT invent card data, card_ids, or earn rates. Example:
    ```
    🃏 Card optimiser not ready yet — populate the Cards and CardStrategy
-   tables first (see docs/SETUP.md section 1.4).
+   tabs first (see supabase/migrations/0001_init.sql).
    ```
 
 2. **ALL nudges are automatic — you do NOT send any of them.** Three
@@ -63,7 +63,7 @@ rules, or the log_expense flow — they live in `skills/expense-tracker/SKILL.md
 | Tool | When to call |
 |---|---|
 | `get_card_cap_status(card_id?, category?)` | User asks about cap progress, Friday summary briefing |
-| `get_bonus_pool_status(month?)` | User asks about a card's monthly bonus-cap headroom ("how's my contactless cap?", "how much left on Revo?") |
+| `get_bonus_pool_status(month?)` | Friday "cards this month" section (print `lines` verbatim); user asks about a card's monthly bonus-cap headroom or min-spend progress |
 | `recommend_card_for(category, amount?)` | User asks which card to use for a purchase |
 | `plan_month(month?)` | 1st-of-month briefing, user asks "what's my card plan?" |
 | `review_card_efficiency(month?)` | Month-end scorecard (1st-of-month cron on last month) |
@@ -95,14 +95,29 @@ If it returns `status="setup_required"`, say so in one line and stop.
 
 ## Flow: cap progress / weekly briefing
 
-When the Friday cron asks for a "cards on pace" section, call
-`get_card_cap_status()` and produce one line per card:
+When the Friday cron asks for a "cards this month" section, call
+`get_bonus_pool_status()` and print its `lines` VERBATIM, one bullet
+each — it already emits one honest number per pool (UOB Preferred's two
+$600 pools, Revolution's single $1,000 pool, yuu's min-spend progress)
+and OMITS cards with nothing to track:
 
 ```
-💳 Cards this cycle:
-  🟢 DBS Altitude: $412 / $1000 dining (41%)
-  🟡 UOB PRVI: $820 / $1000 general (82%) — watch
-  🔴 Citi PM: $1040 / $1000 grabs (100%) — on fallback
+💳 Cards this month:
+  💳 UOB Preferred Visa: tap $413 / $600 (69%) · online $88 / $600 (15%)
+  💳 HSBC Revolution Visa: $640 / $1,000 bonus pool (64%)
+  💳 DBS Yuu Visa: $312 / $800 min spend — $488 to go
+```
+
+Do NOT use `get_card_cap_status` for this section, do NOT add cards the
+tool omitted ("$0 / $0" lines are noise), and NEVER sum per-category caps
+into a per-card total — the 2026-08-14 summary printed "$312 / $2,469"
+and "$0 / $4,800" by adding three and eight rows that all describe the
+SAME pool. `get_card_cap_status` remains the tool for the conversational
+"how close am I to the X cap for Y?" question, one (card, category) at a
+time:
+
+```
+🟡 UOB Preferred: $520 / $600 groceries this cycle (87%)
 ```
 
 Traffic lights: 🟢 ok (<80%), 🟡 warning (80–99%), 🔴 capped (≥100%).
@@ -177,7 +192,7 @@ User says something like:
 
 - Card data (card_id, display_name, cycle_start_day, etc.) lives in the
   `Cards` tab. Strategy (primary, cap, earn rate, fallback) lives in
-  `card_strategy`. Column meanings are in `docs/SETUP.md` section 1.4.
+  `CardStrategy`. Both have a schema doc in `supabase/migrations/0001_init.sql`.
 - Nudge dedup lives in the `CardNudgeLog` tab (auto-created by the helper).
   At most one nudge per (cycle, card, category, threshold).
 - The post-cap nudge is suppressed at 100% if the 80% nudge already fired

@@ -1,0 +1,11 @@
+# /budget — budget status query. See log.yaml for why bundles exist at all
+# (the gateway rejects unknown slash-commands since 0.20.x).
+name: budget
+description: How much is left — "/budget" or "/budget Groceries"
+skills:
+  - budget-manager
+instruction: |
+  The user is asking about their budget from Telegram. If there is text
+  after the command it names a category; otherwise report all categories.
+  Follow the budget-manager skill's query flow. Telegram formatting only:
+  short lines, no markdown tables or headers.

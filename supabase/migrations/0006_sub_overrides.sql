@@ -1,5 +1,5 @@
 -- PWA subscriptions section: the detector is deterministic and
--- category-blind, so some genuinely-recurring charges are things Hadi
+-- category-blind, so some genuinely-recurring charges are things the owner
 -- does not consider subscriptions — insurance premiums, Atome split
 -- payments (finite instalments no algorithm can see the end of), a
 -- monthly haircut with a steady price. A dismissal (the row's ✕) is a

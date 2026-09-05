@@ -4,27 +4,51 @@ model:
   base_url: "https://api.openai.com/v1"
   max_tokens: 8192
 
-smart_model_routing:
-  enabled: true
-  max_simple_chars: 180
-  max_simple_words: 30
-  # Simple-turn route. Was legacy "gpt-5-nano", whose dated snapshot leaves
-  # the API on 2026-12-11 (the floating alias would silently repoint to a
-  # different model). OpenAI's migration table names gpt-5.4-nano as the
-  # replacement; the price gap between the two legs is noise at our volume.
-  cheap_model:
-    provider: "custom"
-    model: "gpt-5.4-nano"
-    base_url: "https://api.openai.com/v1"
-    api_key_env: "OPENAI_API_KEY"
-
 terminal:
   backend: "local"
   cwd: "."
   timeout: 180
 
-memory:
-  mode: "local"
+# Auxiliary LLM forks — ALL OFF. Every one of these is default-ON upstream as
+# of v0.20.x and none existed at our old 0.10 pin, so the SHA bump would have
+# silently added background model calls to a single-user 512MB box:
+#
+#   background_review  — a post-turn "self-improvement" agent fork (~30k tokens
+#                        per fire, 600k input cap). Its job is to write
+#                        MEMORY.md / create skills, but /root/.hermes is
+#                        rebuilt on every deploy, so anything it writes is
+#                        thrown away. Our tier-2 memory is hand-curated on
+#                        purpose (CLAUDE.md M18). There is no per-platform
+#                        switch — this is global, Telegram included.
+#   title_generation   — auto-names sessions on the MAIN model. Webhook
+#                        sessions are NOT excluded upstream (only cron and
+#                        subagent are), so this would have been one extra LLM
+#                        call per ingested bank email.
+#   curator            — weekly skill prune/archive pass over HERMES_HOME/skills,
+#                        which is exactly where our five runtime skills live.
+#                        It only adopts agent-created skills today so ours are
+#                        not candidates, but it also ticks a background thread
+#                        and can rewrite cron-job skill references after a
+#                        consolidation. Cheap insurance to turn off.
+auxiliary:
+  background_review:
+    enabled: false
+  title_generation:
+    enabled: false
+
+curator:
+  enabled: false
+
+# Non-LLM subsystems, also new and also default-on. Neither is used here and
+# both cost something on a 512MB single-core instance: lsp spawns language
+# servers plus a background event loop, and model_catalog periodically fetches
+# a remote model registry (a new outbound network dependency we don't need —
+# our model is pinned in the `model:` block above).
+lsp:
+  enabled: false
+
+model_catalog:
+  enabled: false
 
 # Voice STT — explicit, config-keyed, no auto-detect. After PR #63 evicted
 # local faster-whisper, the auto-detect chain was supposed to fall through
@@ -46,8 +70,7 @@ stt:
 # job, send me a new message..." footer). For a single-user deployment
 # the footer's unsubscribe affordance is noise — we already know the
 # "stop reminder X" phrase and can list jobs via `hermes cron list`.
-# Flag lives at cron/scheduler.py:313 in hermes-agent (undocumented in
-# cli-config.yaml.example but production-supported).
+# Still honoured at v0.20.6 (cron/scheduler.py, default True).
 cron:
   wrap_response: false
 
@@ -56,6 +79,10 @@ platforms:
     enabled: true
   webhook:
     enabled: true
+    # NOTE: this top-level `port` has never actually been bridged into the
+    # adapter — it works only because 8644 happens to equal upstream's
+    # DEFAULT_PORT. The supported override is the WEBHOOK_PORT env var. Left
+    # as documentation of intent; do not "fix" it into extra without testing.
     port: 8644
     extra:
       secret: __WEBHOOK_SECRET_PLACEHOLDER__
@@ -70,26 +97,62 @@ platforms:
             Time: {time}
             Payment method: {payment_method}
             Source: {source}
+            Notes: {notes}
+            Idempotency key: {idempotency_key}
 
             Use the expense-tracker skill to categorize and log this transaction.
             When you call log_expense, pass source="email" (this row originated
-            from the Gmail webhook, not from a manual user message) AND pass
-            time="{time}" — it disambiguates same-day same-amount purchases.
+            from the Gmail webhook, not from a manual user message), pass
+            time="{time}", AND pass idempotency_key="{idempotency_key}" copied
+            EXACTLY — it is what makes a retried webhook dedupe. If the
+            Idempotency key line is empty or still shows a curly-brace
+            placeholder, omit that argument. If the Notes line carries an
+            "orig:" FX trace, pass it through as notes VERBATIM (it is the
+            travel-mode activation signal); if Notes is empty or shows a
+            curly-brace placeholder, omit notes.
           skills:
-            - expense-tracker
+            - expense-ingest
           deliver: telegram
 
 # Explicit per-platform toolset allowlist.
-# Replaces the broad `hermes-telegram` / `hermes-webhook` presets (each of
-# which pulls in ~30 tools including browser_*, image_generate,
-# text_to_speech, etc.) with a narrow set relevant to expense tracking.
+# Replaces the broad `hermes-telegram` / `hermes-webhook` / `hermes-cron`
+# presets (each of which pulls in ~30 tools including browser_*,
+# image_generate, text_to_speech, etc.) with a narrow set relevant to
+# expense tracking.
 #
-# Dropped from the telegram preset: browser, image_gen, tts.
-# Kept: web, terminal, file, vision, skills, messaging (send_message),
-# cronjob (for reminder scheduling), todo, memory, session_search, clarify.
+# THE TOOLSET NAME `expense_tracker` MUST APPEAR IN EVERY LIST THAT SHOULD SEE
+# OUR 37 TOOLS — telegram, webhook AND cron. There is no longer any Dockerfile
+# sed injection; registry registration plus these lists is the only route.
 #
-# Webhook (no user chat, just Gmail → categorize → log) is tighter still —
-# drops vision, session_search, clarify on top of the telegram drops.
+# Telegram — dropped from the preset: browser, image_gen, tts.
+# Kept: web, terminal, file, vision, skills, cronjob (for reminder
+# scheduling), todo, memory, session_search, clarify.
+# `messaging` was removed from this list at the 0.20.6 bump: upstream deleted
+# the agent-callable send_message tool and the whole messaging toolset in
+# v0.16.0, so the name now resolves to nothing and only prints a warning.
+#
+# Webhook (no user chat, just Gmail → categorize → log) is expense_tracker
+# ONLY. Every tool schema rides in EVERY API call, and the ingest route
+# was carrying ~5.3k tokens of web/terminal/file/cronjob/todo/memory/
+# messaging schemas it never invokes (the skill's webhook flow uses
+# lookup_merchant_category, get_active_travel_mode, log_expense[_pending]
+# and update_budget — all expense_tracker). Skill injection is independent
+# of the `skills` toolset, and Telegram delivery is gateway-side
+# (`deliver: telegram`), not a tool. Trimmed 2026-08-17 after the Aug-15
+# TPM storm (2 concurrent ingests × ~28k-token calls × nudge/continuation
+# retries > 200k tokens/min at OpenAI Tier 1).
+#
+# Cron — NEW AND LOAD-BEARING at v0.20.x. The scheduler now resolves a job's
+# tools through the per-platform config for the "cron" platform instead of
+# handing every registered tool to the agent. Without this list the default
+# `hermes-cron` composite applies and NONE of the expense tools reach any of
+# the six jobs — and it fails completely silently, with no "unknown toolset"
+# warning, because every name in the default composite is itself valid. The
+# 21:00 review, the Friday and 1st-of-month summaries, the Sunday sweep, the
+# 03:00 Sheet export and the Jan-1 archive would all just stop working.
+# expense_tracker alone is enough: `--skill` injection does not need the
+# `skills` toolset, and cronjob/clarify are force-subtracted by the scheduler
+# anyway.
 platform_toolsets:
   telegram:
     - web
@@ -97,7 +160,6 @@ platform_toolsets:
     - file
     - vision
     - skills
-    - messaging
     - cronjob
     - todo
     - memory
@@ -105,14 +167,8 @@ platform_toolsets:
     - clarify
     - expense_tracker
   webhook:
-    - web
-    - terminal
-    - file
-    - skills
-    - messaging
-    - cronjob
-    - todo
-    - memory
+    - expense_tracker
+  cron:
     - expense_tracker
 
 display:

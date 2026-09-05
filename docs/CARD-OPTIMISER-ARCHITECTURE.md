@@ -64,9 +64,10 @@ gateway process. Wrong primitive for card-optimiser because:
   money + cognitive load for zero gain.
 
 **Decision**: card-optimiser is a **second skill in the same Hermes
-profile** as expense-tracker. Both share the same registered toolset;
-card-optimiser adds its card tools on top. Separate profiles would only
-become relevant if a second tenant existed, which is not a goal.
+profile** as expense-tracker. Both share the 15+ tools already
+registered; card-optimiser adds ~5 new tools on top. Profiles will
+become relevant only if a second tenant exists (long-term roadmap
+item #10).
 
 ## Sheet schema
 
