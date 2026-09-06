@@ -18,12 +18,12 @@ ledger yourself.
 2. From the repo root:
 
    ```
-   py -V:3.11 recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
+   python recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
    ```
 
    (Adjust filenames to whatever is actually in `samples/`; the script
    sniffs the bank from the content. If pypdf is missing it will say so —
-   install with `py -V:3.11 -m pip install pypdf`.)
+   install with `pip install pypdf`.)
 3. Credentials load from the repo-root `.env` automatically. Never print
    `SUPABASE_URL` or `SUPABASE_SERVICE_KEY`.
 

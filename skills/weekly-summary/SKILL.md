@@ -2,7 +2,7 @@
 name: weekly-summary
 description: Generates weekly and monthly expense summaries with spending insights
 version: 3.1.0
-author: Hadi
+author: alhazjm
 license: MIT
 platforms: [linux]
 metadata:

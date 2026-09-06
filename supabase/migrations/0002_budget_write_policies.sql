@@ -1,6 +1,6 @@
 -- Budget write policies for the PWA editor (rename = UPDATE, row delete =
 -- DELETE, cell save = INSERT/UPDATE upsert). 0001 created read-only
--- policies; the insert/update pair was applied by hand from the PR #33
+-- policies; the insert/update pair was applied by hand before this file existed
 -- setup SQL and never landed in a migration — this makes all three
 -- reproducible. Idempotent: an already-existing policy name is skipped, and
 -- permissive policies OR together, so hand-applied variants coexist safely.

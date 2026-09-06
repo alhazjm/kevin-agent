@@ -76,7 +76,7 @@ is the same list for doing it by hand or for understanding a red run.
 5. `model_tools.py` calls `discover_builtin_tools()` and `tools/registry.py`
    defines it — custom tool registration depends on it.
 6. `cron/scheduler.py` still resolves a job's tools via
-   `_get_platform_tools(cfg, "cron")`, honours `wrap_response`, and treats
+   `_get_platform_tools(cfg or {}, "cron")` (that literal), honours `wrap_response`, and treats
    `[SILENT]` as intentional silence. If cron tool resolution changes again,
    re-check that all 37 tools still reach the six jobs — they fail silently
    when they don't.
@@ -93,7 +93,8 @@ is the same list for doing it by hand or for understanding a red run.
 10. A top-level `skills/` directory still exists upstream (the Dockerfile
     prunes it; the gateway re-seeds from it on every start).
 
-Everything in that list is a `grep`. The two patches are also *applied* to a
+Everything in that list is a `grep`, and the workflow runs all ten (items 9
+and 10 as one check each). The two patches are also *applied* to a
 downloaded copy and the result compiled — see section 4.
 
 ## 4. The procedure

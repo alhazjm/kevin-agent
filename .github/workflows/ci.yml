@@ -42,7 +42,7 @@ jobs:
         # you fork and later publish.
         run: |
           set -e
-          if grep -rInE "hadialhazim|jfrknoykalgrucizjszs|personal-expense-hermes-deploy\.onrender" \
+          if grep -rInE "hadialhazim|jfrknoykalgrucizjszs|personal-expense-hermes-deploy\.onrender|\bHadi\b|\b(haku|nabs)\b" \
                --exclude-dir=.git --exclude-dir=.github . ; then
             echo "::error::personal identifiers found in the tree"; exit 1
           fi

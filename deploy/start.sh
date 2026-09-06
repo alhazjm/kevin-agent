@@ -52,7 +52,7 @@ for dir in sessions memories cron llm_usage; do
     fi
 done
 
-# Session retention (agreed with the owner 2026-07-28): ROLLING windows keyed on
+# Session retention (design decision, 2026-07-28): ROLLING windows keyed on
 # last-activity mtime, applied at every start — the 04:00 nightly restart
 # makes this effectively daily. Cron-job transcripts (~2/3 of disk growth,
 # near-zero recall value): 30 days. Everything else (chats, webhook

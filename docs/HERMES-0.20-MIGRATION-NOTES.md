@@ -1,4 +1,4 @@
-# hermes-agent 0.10 → 0.20.6 — what changed, why, and how it works now
+# hermes-agent 0.10 → 0.21 (via 0.20.6) — what changed, why, and how it works now
 
 **The bump**: `HERMES_AGENT_SHA` `73d0b083` (v0.10.0, 2026-04-19) →
 `5fc308a70719a83cccdbba4c0e39c23f5a8239d5` (v0.20.6, tag `v2026.8.27`,
@@ -24,7 +24,7 @@ renders as an empty string until a job writes to it), Bot Mode (desktop
 only), and a Telegram inline command picker.
 
 This is the reference for *what is different about Kevin now*. It supersedes
-the research in `docs/HANDOFF-hermes-0.20-migration.md`, which was written on
+the research in `docs/HANDOFF-hermes-0.20-migration.md` (a private-repo handoff, not exported here), which was written on
 2026-08-17 against upstream `main` — five of its conclusions turned out to be
 wrong at the SHA we actually pinned, and those are called out below. Every
 claim here was re-verified against a local snapshot of upstream at
@@ -454,7 +454,7 @@ Done before merge:
 - [x] Every disabled aux key path confirmed to exist with default `True`.
 - [x] `bash -n cron/setup-cron-jobs.sh` clean; no comment lines inside
       Dockerfile `RUN` continuations.
-- [x] `pytest tests/ -q` → **626 passing**, unchanged (no `tools/*.py` touched).
+- [x] `pytest tests/ -q` → **626 passing** at the time (648 in this repo now), unchanged (no `tools/*.py` touched).
 
 Still to do on the running container (the build is the first real gate):
 
@@ -484,7 +484,7 @@ Still to do on the running container (the build is the first real gate):
    response" and keep booking soft-fails. *(done on the original deployment 2026-09-04)*
 2. No SQL migration. No `clasp push`. No new env vars. No Render config
    change.
-3. `docs/HANDOFF-hermes-0.20-migration.md` is now historical — this file is
+3. `docs/HANDOFF-hermes-0.20-migration.md` (private repo) is now historical — this file is
    the current reference.
 
 ### 8a. Follow-up deploy: the slash-command bundles (§2.7)

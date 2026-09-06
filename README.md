@@ -24,7 +24,7 @@ Bank-alert emails are parsed within ~5 minutes of a purchase and land in the led
 | *"Alex owes me $20 for lunch"* | Opens an IOU; one tap in the PWA marks it repaid and the ledger self-corrects |
 | *"rm33 lunch"* during a trip | Converts at today's rate, routes to the trip's budget and bucket, and counts it |
 
-And **Kevin**, a single-file PWA dashboard, shows the read-side at a glance: left-to-spend pace, budget meters, per-card statement-cycle and bonus-cap meters, trip pots, open IOUs, detected subscriptions, and a receipt-styled transaction tape. Open [`pwa/index.html`](pwa/index.html) straight from disk to see it with sample data — no setup needed.
+And **Kevin**, a two-page PWA dashboard (no framework, no build step), shows the read-side at a glance: left-to-spend pace, budget meters, per-card statement-cycle and bonus-cap meters, trip pots, open IOUs, detected subscriptions, and a receipt-styled transaction tape. Open [`pwa/index.html`](pwa/index.html) straight from disk to see it with sample data — no setup needed.
 
 ### How one purchase becomes a row
 
@@ -86,7 +86,7 @@ Domain intelligence no off-the-shelf app has:
 
 ### 4 · Give it a real database and a face
 
-The Google Sheet had been the database from day one — the right call until it wasn't. This era moved the ledger to **Supabase Postgres** (atomic dedup via `ON CONFLICT DO NOTHING`, row-level security, the Sheet demoted to an optional nightly read-only export for humans), and shipped **Kevin**: one HTML file, no framework, no build step. Email-OTP auth, RLS-scoped reads, client-side stat calcs, and an in-app budget editor.
+The Google Sheet had been the database from day one — the right call until it wasn't. This era moved the ledger to **Supabase Postgres** (atomic dedup via `ON CONFLICT DO NOTHING`, row-level security, the Sheet demoted to an optional nightly read-only export for humans), and shipped **Kevin**: two HTML pages, no framework, no build step. Email-OTP auth, RLS-scoped reads, client-side stat calcs, and an in-app budget editor.
 
 Having a real database made derived features cheap. Subscription detection moved from "merchant repeats" to *billing behaviour* — same category, once a month, tight day-of-month spread, near-flat amount — because bank strings carry per-charge reference codes that make merchant matching useless.
 
@@ -160,7 +160,7 @@ Small on purpose. Each carries an explicit *"what does NOT belong here"* section
 | [`USER.md`](hermes-config/USER.md.example) | People, payment methods, communication rules | Things the model needs to know about *you* that don't change week to week |
 | [`MEMORY.md`](hermes-config/MEMORY.md.example) | Schema, webhook payload shape, enums, edge-case quirks | Machine-ish reference — answers "how does this system work" questions |
 
-They ship as `.example` templates and are gitignored under their real names, so a filled-in `USER.md` can't be committed by accident. One honest caveat, discovered during the 0.21 upgrade and documented rather than hidden: hermes reads `USER.md` and `MEMORY.md` from the *persistent disk*, not from where the Dockerfile copies them — so only `SOUL.md` loads from the image. The templates say how to make the other two live.
+They ship as `.example` templates and are gitignored under their real names, so a filled-in `USER.md` can't be committed to *this* repo by accident — which also means your fork needs them added with `git add -f` before the first build, or the Dockerfile's COPY fails (SETUP says exactly how). One honest caveat, discovered during the 0.21 upgrade and documented rather than hidden: hermes reads `USER.md` and `MEMORY.md` from the *persistent disk*, not from where the Dockerfile copies them — so only `SOUL.md` loads from the image. The templates say how to make the other two live.
 
 ### Skills, tools, storage
 

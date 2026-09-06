@@ -118,10 +118,23 @@ cp SOUL.md.example   SOUL.md
 
 Fill in `USER.md` (it is all placeholders), skim `MEMORY.md` (mostly system
 contract — keep it verbatim if you keep the same tools), and rewrite
-`SOUL.md` if you want a different voice and name. All three are gitignored
-under their real names, so your filled-in copies can never be pushed here by
-accident; commit them to your own fork deliberately so Render can build
-from them.
+`SOUL.md` if you want a different voice and name.
+
+**Then commit them to your fork with `-f`.** All three are gitignored under
+their real names (so they can never be pushed to the upstream repo by
+accident), which also means a plain `git add .` silently skips them and
+`git status` never lists them. Render builds from your fork, and the
+Dockerfile COPYs the real filenames, so without this the build fails at
+`COPY hermes-config/USER.md`:
+
+```bash
+git add -f hermes-config/USER.md hermes-config/MEMORY.md hermes-config/SOUL.md
+git commit -m "Add my memory files"
+```
+
+If you would rather not carry personal details in a fork's history, the
+alternative is to delete the three `hermes-config/*.md` lines from
+`.gitignore` in your fork — simpler mental model, but you lose the guard.
 
 > One honest caveat, discovered during the 0.21 upgrade: hermes reads
 > `USER.md` and `MEMORY.md` from `HERMES_HOME/memories/`, which `start.sh`
@@ -283,11 +296,16 @@ Column meanings are documented inline in `0001_init.sql`.
 The PWA signs in with Supabase Auth **email OTP** — `signInWithOtp` sends
 the mail, and the page accepts either the 6-digit code or the magic link.
 In Authentication settings you need: email auth enabled, your static-site
-URL (section 4) in the allowed redirect URLs, **"Allow new users to sign
-up" turned off** (the PWA is single-user; RLS protects the data either way,
-but there is no reason to let strangers create accounts), and —
-realistically — your own SMTP configured, because the built-in sender is
-heavily rate-limited. The PWA's own error copy points at the same place.
+URL (section 4) in the allowed redirect URLs, and — realistically — your
+own SMTP configured, because the built-in sender is heavily rate-limited.
+The PWA's own error copy points at the same place.
+
+**Order matters for one setting.** The OTP flow *creates* your user on the
+first sign-in, so do the first sign-in (section 4) **before** you turn off
+"Allow new users to sign up" — disable it first and your own first OTP is
+rejected with "Signups not allowed". Once you are in, turn sign-ups off:
+the PWA is single-user and there is no reason to let strangers create
+accounts (RLS protects the data either way).
 
 **Verify:** in the SQL editor, `select * from card_strategy where category =
 '_default';` returns a row (if you seeded cards), and `select count(*) from
@@ -484,6 +502,16 @@ clasp push
 Or: script.google.com → New project → paste `Code.gs`, and paste
 `appsscript.json` over the manifest (View → Show manifest file).
 
+`clasp create` in a directory that already has a manifest can pull the new
+project's default `appsscript.json` over the committed one (timezone and
+scopes). If `git status` shows it modified after `clasp create`, run
+`git checkout apps-script/appsscript.json` before `clasp push`.
+
+`clasp create` in a directory that already has a manifest can pull the new
+project's default `appsscript.json` over the committed one (timezone and
+scopes). If `git status` shows it modified after `clasp create`, run
+`git checkout apps-script/appsscript.json` before `clasp push`.
+
 ### 5.2 Edit the two hardcoded constants
 
 In `apps-script/Code.gs`:
@@ -521,7 +549,7 @@ deliberate byte-for-byte Python port) in the same commit —
 
 ### 5.4 Script Properties
 
-Project Settings (gear icon) → Script Properties. All read at module load:
+Project Settings (gear icon) → Script Properties. All but `RENDER_API_KEY` are read at module load (it is read when the restart fires):
 
 | Property | Why | Required? |
 |---|---|---|
@@ -655,7 +683,9 @@ headers — realistically the fiddliest part of the whole setup.
 4. Keys → Add key → **JSON**. Download the file.
 
 `scripts/setup-google-oauth.sh` walks the same steps and automates them if
-you have `gcloud` installed.
+you have `gcloud` installed. Google Cloud project ids are globally unique,
+so set your own first: `GCP_PROJECT_ID=my-kevin-backup bash
+scripts/setup-google-oauth.sh` (without it the script generates one).
 
 Open the JSON and note the `client_email` value
 (`something@project-id.iam.gserviceaccount.com`).
@@ -841,7 +871,7 @@ Grouped by consequence. The first group breaks or leaks if you skip it.
 |---|---|
 | `supabase/migrations/0003_cards_bonus_cap.sql`, `0007_cards_base_mpd.sql` | `update` lines carrying the original deployment's card ids |
 | `supabase/migrations/0008_category_meta.sql` | The example seed block — your fixed categories |
-| `tools/card_optimiser.py` | Steering nudges and the two-pool bonus tracker special-case the original card ids (`uob-pref`, `dbs-yuu`, …); the pattern tuples are annotated "replace wholesale" |
+| `tools/card_optimiser.py` | Steering nudges and the two-pool bonus tracker special-case the original card ids (`uob-pref`, `dbs-yuu`, …); the pattern tuples are annotated "replace wholesale with your own issuers' lists" |
 | `pwa/index.html` | `LIVERY_ID` map (card ids → card art), the same two-pool split on the card tiles, and the sample-data block |
 | `recon/statement_parsers.py` | DBS/UOB statement layouts, and the supplementary-card attribution rule |
 | `hermes-config/MEMORY.md`, `SOUL.md` | Ship as `.example`; payment-method examples use fictional card last-4s; persona and tone |
@@ -876,6 +906,7 @@ Grouped by consequence. The first group breaks or leaks if you skip it.
 | Cron jobs run but report "unknown tool"; the nightly export silently stops | `platform_toolsets.cron` is missing from `cli-config.yaml` — cron allow-lists tools per platform and warns about nothing | Add a `cron:` entry containing `expense_tracker` |
 | Cron fires at the wrong hour | Someone converted expressions to UTC, or `TZ` was changed | Expressions are wall-clock against `ENV TZ`; keep the two consistent |
 | Docker build fails inside a `RUN python3 /app/patches/...` step | Upstream `hermes-agent` moved and a patch anchor no longer matches | Do not loosen the anchor — [UPGRADING-HERMES.md](UPGRADING-HERMES.md) section 5 |
+| Docker build fails at `COPY hermes-config/USER.md` (or `MEMORY.md` / `SOUL.md`) | The three memory files are gitignored, so they never reached your fork — `git add .` skipped them | `git add -f` the three files and push (section 0) |
 | Docker build fails at the fetch step with HTTP 429 | GitHub rate-limited the build host | Redeploy; the fetch already retries three times |
 | Every reply arrives twice (bubble + a chatty summary) | The silence contract broke | Check the build log for the v3 patch marker grep |
 | A bubble is followed by "⚠️ Processing completed but no response was generated" | The silence patch is emitting an empty reply instead of `NO_REPLY` | Confirm the patch is at v3 and its marker grep passed |

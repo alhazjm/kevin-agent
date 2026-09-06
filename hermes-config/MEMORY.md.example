@@ -18,8 +18,8 @@ documentation of the system contract (schema, webhook payload, enum
 values, idempotency rules). A few illustrative examples have been
 generalised, and the card last-4s are fictional. Save as `MEMORY.md` in
 this directory for your own deployment (the Dockerfile COPYs that name;
-the real file is gitignored); the schema sections should stay verbatim if
-you keep the same tools.
+the real file is gitignored, so `git add -f` it to your fork); the schema
+sections should stay verbatim if you keep the same tools.
 
 ## Episodic memory (past sessions)
 
@@ -85,11 +85,11 @@ Sent by `apps-script/Code.gs` via the `expense-ingest` route in `hermes-config/c
 }
 ```
 
-Non-SGD amounts are FX-converted to SGD by the Apps Script (frankfurter.app) before sending; `notes` then carries the `orig: <CUR> <amt> @ <rate>` trace (empty string otherwise — the field is always present). The route renders it as the `Notes:` line; pass it to `log_expense` verbatim. `idempotency_key` is computed by the Apps Script at parse time — pass it to `log_expense` VERBATIM (never invent one; omit when absent) so a retried webhook dedupes regardless of how other arguments are reassembled.
+Non-SGD amounts are FX-converted to SGD by the Apps Script (frankfurter.dev, ECB rates) before sending; `notes` then carries the `orig: <CUR> <amt> @ <rate>` trace (empty string otherwise — the field is always present). The route renders it as the `Notes:` line; pass it to `log_expense` verbatim. `idempotency_key` is computed by the Apps Script at parse time — pass it to `log_expense` VERBATIM (never invent one; omit when absent) so a retried webhook dedupes regardless of how other arguments are reassembled.
 
 ## Quirks & rules
 
-- **Always-ask merchants**: Shopee, Lazada, Amazon. They sell everything; never auto-categorise. Even if `merchant_map` has a hit, just ask me.
+- **Multi-category merchants** (Shopee, Lazada, Amazon, supermarkets, 7-Eleven): log straight to the default category with ONE bubble and let me correct by replying — never two bubbles, and never learn a `merchant_map` entry for them.
 - **Foreign currency**: bank emails arrive pre-converted to SGD with the original in `notes` (`orig: …`). Manual foreign amounts ("rm33", "฿200") are converted IN THE TOOL: pass `amount` and `currency` exactly as the user gave them to `log_expense` / `log_expense_pending` and do NOT convert yourself — the tool converts via frankfurter, stamps the same `orig: <CUR> <amt> @ <rate> (frankfurter <date>)` trace, and returns `status=error, reason=fx_failed` (nothing logged) if the rate lookup fails, in which case ask for the SGD amount.
 - **Trip routing is the tool's job**: during an active trip, `log_expense` itself routes YouTrip payments and FX-converted (`orig:`) spends into the trip category with a `[bucket:X]` derived from the HOME category you proposed, and reports it as `trip_routed`. Always propose the HOME category as usual; never pick the trip category yourself. SGD spends with no signal stay home. Manual foreign entries ("rm33") mean CASH unless the user names YouTrip — no payment method, converted to SGD, routed to the trip, counted in the month; pass `payment_method="YouTrip Card"` only when they say so (then it's pot-internal).
 - **Backfilled rows** (`source = "backfill"`) are statement imports (Sam's supplementary card, brought in monthly via the local statement-recon workflow — there is no runtime backfill tool). Exclude them from subscription-creep detection and other analytics.

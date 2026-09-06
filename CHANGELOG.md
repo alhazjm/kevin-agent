@@ -60,7 +60,7 @@ FX, opt-out flag, fixed-bill guard).
 
 **Skills.** `expense-ingest` — a slim webhook-only subset of
 `expense-tracker`, the only skill the ingest route loads (the full skill was
-riding along in every API call). expense-tracker 5.10.0, card-optimiser
+riding along in every API call). expense-tracker 5.10.1, card-optimiser
 1.5.0, budget-manager 3.1.0, weekly-summary 3.1.0.
 
 **Cron.** Six jobs (the daily-noon budget ping was retired; the 21:00 review

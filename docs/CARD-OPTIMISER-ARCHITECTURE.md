@@ -1,6 +1,12 @@
 # Card Optimiser — Architecture
 
-Status: **designed, not yet built**. Sibling skill to `expense-tracker`.
+> **Historical design record.** Written before the feature shipped and kept as
+> the rationale. Where it says "Dockerfile sed injection", read `platform_toolsets`
+> in `hermes-config/cli-config.yaml` (AGENTS.md, M2); where it says a Sheet tab,
+> read the Supabase table of the same name. Current behaviour is in the skill
+> files and AGENTS.md.
+
+Status: **shipped** (card-optimiser skill, six tools); this document is the design record. Sibling skill to `expense-tracker`.
 One-profile multi-skill (see "Profiles vs multi-skill" below for why not
 a separate Hermes Profile).
 
@@ -110,7 +116,7 @@ happens via MerchantMap in expense-tracker. Zero schema churn.
 
 All new tools go into `tools/expense_sheets_tool.py`, follow the same
 register pattern, and need to be added to the Dockerfile sed injection
-(CLAUDE.md §Dockerfile gotchas).
+(AGENTS.md M2 — now `platform_toolsets`).
 
 ### 1. `get_card_cap_status(card_id?, category?)`
 
@@ -307,7 +313,7 @@ Redis, no schema migrations on the existing tabs.
       `tools/expense_sheets_tool.py` next to the rest.
 - [ ] Register 5 tools: `get_card_cap_status`, `recommend_card_for`,
       `plan_month`, `review_card_efficiency`, `set_category_primary`.
-- [ ] Add all 5 to Dockerfile sed injection (CLAUDE.md §2).
+- [ ] Add all 5 to Dockerfile sed injection (AGENTS.md M2).
 - [ ] Add `skills/card-optimiser/SKILL.md` with tool-use rules and
       the post-cap nudge integration contract.
 - [ ] Update cron `setup-cron-jobs.sh`: 1st of month + Friday 6 PM

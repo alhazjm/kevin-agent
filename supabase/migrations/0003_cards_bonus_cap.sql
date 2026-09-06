@@ -1,5 +1,5 @@
 -- cards.bonus_cap — the calendar-month bonus spend cap in S$ (0 = none).
--- This column was added to the LIVE table by hand around PR #40
+-- This column was added to the LIVE table by hand before migration 0003
 -- (`alter table cards add column ... ; update ... uob-pref = 600`) and
 -- later hsbc-revo = 1000 alongside the card_strategy seed rows. This makes
 -- it reproducible for a fresh database. Idempotent — safe to run on the

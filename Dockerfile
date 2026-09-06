@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Telegram gateway then sends with send_voice — a real voice bubble with a
 # waveform, instead of an mp3 file attachment. The conversion is a short
 # ffmpeg subprocess per spoken reply (transient RAM; fine post-whisper-
-# eviction, PR #63 — don't ship this while local whisper is still in RAM).
+# eviction — don't ship this while local whisper is still in RAM).
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -34,7 +34,7 @@ WORKDIR /app
 
 # Pinned hermes-agent commit. Bump this value to pull upstream updates.
 # Changing the ARG invalidates the clone layer so Docker re-fetches.
-# Before bumping, work the "hermes-agent SHA bump" checklist in CLAUDE.md and
+# Before bumping, work the "hermes-agent SHA bump" checklist in AGENTS.md and
 # re-verify BOTH patch anchors in deploy/patches/ at the candidate SHA.
 #
 # The old '"send_message",' toolsets.py anchor is GONE as of upstream v0.16.0:
@@ -93,7 +93,7 @@ RUN uv venv venv --python 3.11 && \
 # faster-whisper is deliberately NOT installed. Loading its ~150MB "base"
 # model into this 512MB instance is what tipped the 2026-07-30 12:01 OOM
 # (clean 04:56 restart + morning webhooks + one voice note at 10:34 + the
-# 12:00 cron), so PR #63 evicted it. Since upstream's 2026-05-12 repackaging
+# 12:00 cron), so it was evicted. Since upstream's 2026-05-12 repackaging
 # it lives only in the [voice] extra, which we do not install — so the old
 # `uv pip uninstall faster-whisper` line was removed here: uv exits 0 with a
 # warning when the package is absent, so it could never have "failed loud"
@@ -129,7 +129,7 @@ RUN printf '\nimport tools.expense_sheets_tool\n' >> /app/hermes-agent/model_too
 # exits non-zero unless its anchor matches EXACTLY once, and each RUN then
 # greps for the patch's marker string — so an upstream refactor breaks the
 # Docker build loudly instead of silently shipping unpatched behaviour on
-# Render. Never loosen an anchor to make the build pass (CLAUDE.md M3).
+# Render. Never loosen an anchor to make the build pass (AGENTS.md M3).
 #
 # Both now target agent/conversation_loop.py, not run_agent.py: upstream
 # v0.15.0 extracted the whole agent loop into the module-level function

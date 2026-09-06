@@ -85,7 +85,7 @@ jobs:
           PASS=0; FAIL=0; REPORT=""
           ok()   { PASS=$((PASS+1)); REPORT="$REPORT\n- ✅ $1"; }
           bad()  { FAIL=$((FAIL+1)); REPORT="$REPORT\n- ❌ $1"; }
-          count() { grep -cF -- "$2" "up/$1" 2>/dev/null || echo 0; }
+          count() { grep -cF -- "$2" "up/$1" 2>/dev/null || true; }
 
           # 1+2. The two patches apply to a pristine copy, exactly once each,
           #      and the result still compiles.
@@ -134,7 +134,7 @@ jobs:
           else bad "bundle dispatch or the unknown-command block changed — /log /undo /budget /summary may break"; fi
 
           # 8. Every auxiliary/background feature that is default-on upstream is one we disable.
-          python - <<'PY' > aux.txt
+          python - <<'PY' > aux.txt || bad "aux-feature scan failed to run"
           import re
           L=open('up/hermes_cli/config_defaults.py',encoding='utf-8').read().splitlines()
           out=[]; stack=[]
@@ -205,6 +205,7 @@ jobs:
             gh issue edit "$NUM" --body-file body.md
             echo "updated issue #$NUM"
           else
+            gh label create upstream --description "hermes-agent upstream drift reports" --color 1D76DB 2>/dev/null || true
             gh issue create --title "$TITLE" --body-file body.md --label upstream
             echo "created issue"
           fi

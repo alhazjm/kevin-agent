@@ -14,15 +14,17 @@
 > shell: `cp /root/.hermes/USER.md /root/.hermes/memories/USER.md`.
 > Size it as if it loaded every turn regardless.
 
-This is a **sanitised template**. Fill the placeholders in and save as
-`USER.md` in this directory — the Dockerfile already COPYs that filename,
-and the real file is gitignored so it cannot be committed by accident.
+This is a **sanitised template**; the communication-style and tool-preference defaults below are one user's — edit them freely. Fill the placeholders in and save as
+`USER.md` in this directory — the Dockerfile already COPYs that filename.
+The real file is gitignored, so add it to your fork with
+`git add -f hermes-config/USER.md` or the Render build fails at that COPY.
 
 ## Identity
 
 - Name: `<USER_FIRST_NAME>`
 - Location: `<CITY/COUNTRY, timezone>`
 - Currency: `<DEFAULT_CURRENCY>` (default for all amounts unless explicitly stated otherwise)
+  (The shipped tools assume SGD and Asia/Singapore: `_fx_to_sgd` converts every non-SGD amount INTO SGD, the schema default is SGD, and the Dockerfile sets TZ. Changing the home currency is a code change — see SETUP, "Swapping the pieces".)
 
 ## People
 
@@ -60,5 +62,5 @@ and the real file is gitignored so it cannot be committed by accident.
 - Always confirm before mutating budget or reallocating across categories. Show the diff first, apply on my "yes."
 - Never autonomously rewrite budgets, even if I phrase a request as "absorb the cost." Propose, don't apply.
 - When you are uncertain about a transaction's category, ask via numbered options — never guess silently.
-- Remember my corrections: if I move a merchant from one category to another, write it to the MerchantMap tab so you don't ask again next time.
-- For ambiguous merchants like Shopee / Lazada / Amazon, **always** ask. They sell everything; guessing is worse than asking.
+- Remember my corrections: if I move a merchant from one category to another, write it to the merchant_map table so you don't ask again next time.
+- For multi-category merchants like Shopee / Lazada / Amazon, log to the default category with one bubble and let me correct by replying — do not ask first. They sell everything; guessing is worse than asking.

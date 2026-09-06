@@ -60,7 +60,7 @@ TARGET = Path(
 )
 
 # 20-space indent, `agent.` receiver. Verified exactly once at
-# HERMES_AGENT_SHA=5fc308a7 (0 matches in run_agent.py).
+# HERMES_AGENT_SHA=5fc308a7, re-verified at 29112bef / v0.21.0 (0 matches in run_agent.py).
 ANCHOR = '''                    agent.session_cost_status = cost_result.status
                     agent.session_cost_source = cost_result.source
 
@@ -149,7 +149,7 @@ def main() -> int:
             "FATAL: LLM usage patch anchor not found in "
             "agent/conversation_loop.py. Upstream usage accounting likely "
             "moved; re-inspect the session_cost_status/session_cost_source "
-            "block. See CLAUDE.md 'hermes-agent SHA bump checklist'.",
+            "block. See AGENTS.md 'hermes-agent SHA bump checklist'.",
             file=sys.stderr,
         )
         return 3

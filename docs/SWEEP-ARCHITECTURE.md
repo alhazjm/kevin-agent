@@ -1,5 +1,11 @@
 # Batch 4: Missed Transaction Recovery — Architecture
 
+> **Historical design record.** Written before the feature shipped and kept as
+> the rationale. Where it says "Dockerfile sed injection", read `platform_toolsets`
+> in `hermes-config/cli-config.yaml` (AGENTS.md, M2); where it says a Sheet tab,
+> read the Supabase table of the same name. Current behaviour is in the skill
+> files and AGENTS.md.
+
 ## Problem
 
 When the LLM API fails (HTTP 529, timeout, rate limit), the webhook payload is
@@ -110,7 +116,7 @@ function computeIdempotencyKey(date, merchant, amount, paymentMethod) {
 ```
 
 **Why the Apps Script and not hermes-agent?** We don't control the hermes
-webhook handler code — it's cloned from `alhazjm/hermes-agent` at build time.
+webhook handler code — it's fetched from `NousResearch/hermes-agent` at build time.
 Patching it via Dockerfile `sed` is fragile. The Apps Script is in this repo
 and runs independently.
 

@@ -1,8 +1,8 @@
 ---
 name: expense-tracker
 description: Categorizes bank transactions and logs them to the Supabase expense ledger
-version: 5.10.0
-author: Hadi
+version: 5.10.1
+author: alhazjm
 license: MIT
 platforms: [linux]
 metadata:
@@ -34,7 +34,7 @@ metadata:
 
 1. **`log_expense` sends the confirmation bubble automatically.** The tool
    sends a Telegram message and links the `message_id` to the row — you do
-   NOT need to call `send_message` or `link_telegram_message` yourself.
+   NOT need to send anything yourself or call `link_telegram_message`.
 
    **When `log_expense` returns `bubble_sent: true`, you MUST produce an
    EMPTY assistant reply.** Do not write any text — not "Logged.", not
@@ -111,7 +111,7 @@ The `source` field on a logged row distinguishes how the transaction reached the
 
 ## Where the categories live
 
-The live list of budget categories lives in the **`Budget` tab** of the Google Sheet, NOT in this skill file. To see what categories currently exist, call `get_remaining_budget` (it returns one entry per category). Re-fetch when the user says they added or renamed a category. Stable conventions about the categories themselves (e.g. "Sam" = wife, "Miso" = cat) live in `USER.md`.
+The live list of budget categories lives in the **`budgets` table** (mirrored nightly to the Sheet's Budget tab), NOT in this skill file. To see what categories currently exist, call `get_remaining_budget` (it returns one entry per category). Re-fetch when the user says they added or renamed a category. Stable conventions about the categories themselves (e.g. a partner's or pet's name prefixing their categories) live in `USER.md`.
 
 ## Categorization
 
@@ -184,9 +184,10 @@ if needed**. Do NOT call `log_expense_pending`. Do NOT call
 | Supermarkets (Cold Storage, NTUC, Sheng Siong, Giant) | `Groceries` |
 | Marketplaces (Shopee, Lazada, Amazon) | `Groceries` |
 | Convenience stores (7-Eleven) | `Personal - Food & Drinks` |
+   (Edit this list and the category names to your own supermarkets and categories.)
 
 The user knows the bubble will default and will reply with the right
-category (`nabs food`, `haku litter`, `to claim`, etc.) when the default is
+category (`sam food`, `miso litter`, `to claim`, etc.) when the default is
 wrong — the existing reply-to-edit flow handles the correction. When the
 user replies to correct, call `edit_expense(txn_id=..., new_category=...)`
 and STOP — do NOT follow up with `learn_merchant_mapping`.
@@ -429,7 +430,7 @@ until the nightly sweep completes it:
 
 `log_expense` is a single tool call that does three things internally:
 
-1. **Logs the transaction** to the Google Sheet → generates a `txn_id`
+1. **Logs the transaction** to the ledger (Supabase) → generates a `txn_id`
 2. **Sends a confirmation bubble** to Telegram via the Bot API (prefixed with
    a category emoji, e.g. `🍜 Logged SGD 4.00 at Burger → Personal - Food & Drinks`)
 3. **Links the `message_id`** of that bubble to the transaction row
@@ -447,7 +448,7 @@ JSON tells you what happened:
 }
 ```
 
-Do NOT call `send_message` or `link_telegram_message` after `log_expense` —
+Do NOT send any message yourself or call `link_telegram_message` after `log_expense` —
 that would create duplicate messages. **When the result shows `bubble_sent:
 true`, produce an EMPTY assistant reply** — not "Logged.", not "Done.", not
 a period. The user has already received the bubble; any extra text is a
@@ -467,7 +468,9 @@ When the `expense-ingest` webhook fires:
    line (omit the argument if that line is empty or shows a curly-brace
    placeholder — never invent a key). The verbatim key is what makes a
    retried webhook dedupe. The tool sends the confirmation bubble
-   automatically.
+   automatically. `status: "duplicate"` → the row already existed and NO
+   bubble was sent, so the silence contract does NOT apply: reply with ONE
+   short line, e.g. `Already logged as txn_20260802_003.`
 4. If the result includes `possible_duplicate_of`, say NOTHING extra —
    the bubble already carries the ⚠️ near-duplicate warning and the
    delete instruction. The silence contract stands.
@@ -695,7 +698,7 @@ vs March: +12% overall ($845 vs $754 at same point)
 
 ### Insights Store
 
-The Insights tab is tier-4 semantic memory — derived facts that persist across
+The insights table is tier-4 semantic memory — derived facts that persist across
 sessions. The LLM writes insights after generating reports; future runs read
 them to build on prior conclusions.
 
@@ -782,7 +785,7 @@ When those conditions hold:
 2. If the reply mentions specific transactions (explicit txn_id, or
    "that $45 dinner", which you can map via context), pass them in
    `txn_ids_referenced` comma-separated.
-3. If 1-3 obvious tags stand out (`nabs`, `work`, `regret`, `promo`,
+3. If 1-3 obvious tags stand out (`sam`, `work`, `regret`, `promo`,
    etc.), pass them in `tags` comma-separated. Don't force tags — empty
    is fine.
 4. Acknowledge briefly, one short line: `📓 Saved.` No summary, no
@@ -812,8 +815,7 @@ from the Sunday 10 PM weekly sweep cron.
 
 1. Call `sweep_missed_transactions(days_back=7)` (or whatever window the user
    asked for — "last two weeks" → `days_back=14`).
-2. If `status == "error"`, the WebhookLog tab doesn't exist yet — say so in
-   one line. The fix is deploying the updated Apps Script; don't guess.
+2. If `status == "error"`, the `webhook_log` table is unreadable (missing, or the Supabase pair is unset) — say so in one line; don't guess.
 3. If `missed_count == 0`, reply one short line: `✅ No missed transactions
    in the last N days.` (For the weekly CRON run: reply with exactly
    `[SILENT]` and nothing else — do NOT message the user when there's
@@ -873,7 +875,7 @@ claim, say so.
 
 ## Transaction time (v4.12)
 
-Webhook payloads carry a `Time` field (24h SGT - DBS prints the transaction
+Webhook payloads carry a `Time` field (24h local time - DBS prints the transaction
 time; UOB alerts use the email's arrival time). ALWAYS pass it through as
 `time` when calling `log_expense` or `log_expense_pending`. It participates
 in the duplicate-detection key, so two real purchases at the same merchant

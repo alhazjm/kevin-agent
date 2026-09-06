@@ -7,11 +7,18 @@ checklists literally, treat the named mistakes as real (each one cost
 debugging time at least once), and use the escalation rules instead of
 guessing. When this file and your instinct disagree, this file wins.
 
-> This is the single source. `CLAUDE.md` is a three-line pointer at this
+> This is the single source. `CLAUDE.md` is a short pointer at this
 > file, because Claude Code looks for that name — there is nothing to keep
 > in sync.
 
 ## What this repo is
+
+> **"PEHD"** — you will see it in the env var `PEHD_LLM_USAGE_DIR`, the
+> `PEHD_PATCH_TARGET` override, and the `PEHD patch …` marker strings the
+> Dockerfile greps for. It is the acronym of the private deployment this
+> repo is exported from. Those identifiers are load-bearing (the patch
+> scripts, the Dockerfile greps and the usage summariser all key on them);
+> leave them as they are.
 
 `kevin-agent` is the **deployment shell** for a personal
 expense-tracking agent built on the
@@ -62,7 +69,7 @@ each surface deploys differently:
 Bank email → Gmail → Apps Script (every 5 min, two searches: bank query
 + YouTrip-Shortcut subject query):
   parse (regex; DBS / UOB / HSBC / YouTrip-Shortcut) → FX-convert non-SGD
-  via frankfurter.app (stamps "orig: …" into notes) → audit row to the
+  via frankfurter.dev (stamps "orig: …" into notes) → audit row to the
   Supabase webhook_log table (durable, BEFORE send; Sheet WebhookLog tab
   is the fallback) → HMAC-sign (X-Webhook-Signature) →
   POST /webhooks/expense-ingest
@@ -92,20 +99,20 @@ skills on SGT schedules and deliver to Telegram.
 Dockerfile                     # Render build — see "Build & deploy reference"
 render.yaml                    # Render Blueprint for the web service (env-var list lives here)
 deploy/start.sh                # Container entrypoint; writes .env, seds placeholders, links /data, prunes sessions, runs hermes
-deploy/patches/                # FIVE build-time patches applied to hermes-agent source (see Build & deploy)
+deploy/patches/                # TWO build-time patches applied to hermes-agent source (three retired at 0.20.6; see Build & deploy)
 apps-script/                   # Gmail Apps Script (bank + Shortcut email → webhook); deployed via clasp, not the container
 cron/setup-cron-jobs.sh        # Creates the 6 hermes cron jobs (seeded once per /data disk by start.sh)
 docs/                          # SETUP.md (cloner guide), UPGRADING-HERMES.md (move the upstream pin
                                #   yourself), HERMES-0.20-MIGRATION-NOTES.md, the two RFCs, STATEMENT-RECON.md
 hermes-config/
   cli-config.yaml              # Hermes gateway config (model, stt, webhook route, platform toolsets)
-  USER.md                      # Tier-2 identity (the owner, Sam, Miso, payment methods)
-  MEMORY.md                    # Tier-2 system facts (schema, webhook shape, enums)
-  SOUL.md                      # Tier-2 agent persona (tone, principles)
+  USER.md.example              # Tier-2 identity template (you, your household, payment methods) — the real USER.md is gitignored
+  MEMORY.md.example            # Tier-2 system facts template (schema, webhook shape, enums)
+  SOUL.md.example              # Tier-2 agent persona template (tone, principles)
   skill-bundles/*.yaml         # /log /undo /budget /summary — the gateway rejects unknown slash-commands since 0.20.x; a bundle registers one (ships to /root/.hermes/skill-bundles/)
 skills/                        # RUNTIME skills (ship to /root/.hermes/skills/)
-  expense-tracker/SKILL.md     # Main skill (v5.9.0): categorisation, travel routing, trips/pots, lending, silence contract
-  expense-ingest/SKILL.md      # Webhook-only SUBSET of expense-tracker (v1.0.0) — the only skill the ingest route loads; mirror-locked to it
+  expense-tracker/SKILL.md     # Main skill (v5.10.1): categorisation, travel routing, trips/pots, lending, silence contract
+  expense-ingest/SKILL.md      # Webhook-only SUBSET of expense-tracker (v1.0.1) — the only skill the ingest route loads; mirror-locked to it
   budget-manager/SKILL.md      # Cron-driven budget warnings / reallocation (v3.1.0)
   weekly-summary/SKILL.md      # Friday + 1st-of-month summaries (v3.1.0)
   card-optimiser/SKILL.md      # Cap tracking, card recs, nudges, scorecard (v1.5.0)
@@ -245,7 +252,7 @@ Check your diff against this list before every commit.
   together.*
 - **M14 — The Backfill Contaminator.** Including `source="backfill"` or
   `UNCATEGORIZED` rows in analytics. Backfill rows are statement imports
-  (Sam's supplementary card); counting them corrupts subscription-creep,
+  (a supplementary card that never emails you); counting them corrupts subscription-creep,
   card-cycle spend, trip spend, and efficiency review. *Rule: every
   agent-side aggregate filters out `Source == "backfill"` and
   `_is_pending(row)`. `source` is a closed enum: `email | manual |
@@ -253,14 +260,14 @@ Check your diff against this list before every commit.
   `sheets_client.PENDING_CATEGORY` (imported by `supabase_client`) plus a
   separate `expense_sheets_tool._PENDING_CATEGORY` — the two must stay
   equal. Known, deliberate divergence: the PWA's monthly hero/chart COUNT
-  backfill and pending rows (honest cash-out totals, the owner's 2026-07-31
-  call) — don't "fix" either side to match the other.*
+  backfill and pending rows (honest cash-out totals, a deliberate 2026-07-31
+  decision) — don't "fix" either side to match the other.*
 
 ### Sync contracts (places that must change together)
 
-- **M15 — The Second Manual.** Creating a separate `AGENTS.md` body "to
+- **M15 — The Second Manual.** Creating a separate `CLAUDE.md` body "to
   help Claude Code" and then letting the two drift. This repo has ONE
-  operating manual (this file); `AGENTS.md` is a ten-line pointer at it.
+  operating manual (this file); `CLAUDE.md` is a ten-line pointer at it.
   *Rule: edit `AGENTS.md` only. Never paste its contents anywhere else.*
 - **M16 — The Split-Brain Parser.** Editing the email regexes in
   `apps-script/Code.gs` without `tests/test_email_parser.py` (a deliberate
@@ -418,8 +425,8 @@ Sheet export tools, so Google Cloud is optional for a cloner.
   category). Never bypass the guard.
 - Card optimiser: every public function starts
   `gate = _check_setup(); if gate: return gate` →
-  `{"status": "setup_required", "message": …}` until the `Cards` +
-  `CardStrategy` tabs (incl. the `_default` sentinel row) exist. The skill
+  `{"status": "setup_required", "message": …}` until the `cards` +
+  `card_strategy` tables (incl. the `_default` sentinel row) exist. The skill
   surfaces that message in one line and stops — preserve the gate.
 - Travel mode does NOT use `status` uniformly: `get_active_travel_mode`
   returns an `active: bool`; `get_trip_budget_status` can return
@@ -469,8 +476,8 @@ Sheet export tools, so Google Cloud is optional for a cloner.
   (`assert_called_once_with`, including `""`→`None` coercions) and JSON
   round-trip.
 - The fake registry accepts anything silently — a mis-registered tool will
-  NOT fail tests. That's what the Dockerfile sed check and the preflight
-  skill are for.
+  NOT fail tests. That's what `platform_toolsets` in `cli-config.yaml` and
+  the boot log (no "Unknown toolset", no check_fn warning for our tools) are for.
 - The canonical 11-column header for fixtures:
   `Date, Merchant, Amount, Currency, Category, Source, Payment Method,
   Notes, txn_id, telegram_message_id, idempotency_key`. Legacy-layout tests
@@ -525,8 +532,8 @@ Sheet export tools, so Google Cloud is optional for a cloner.
 - The `.claude/skills/` skills are a DIFFERENT species: repo-side Claude
   Code workflows (/statement-recon, /card-tnc-review, /new-alert-source)
   that never ship to the container and are run by a human from the repo.
-- If a skill references a tool, that tool must exist in the Dockerfile sed
-  list. If a cron prompt in `setup-cron-jobs.sh` encodes a skill behavior
+- If a skill references a tool, that tool must be registered in
+  `expense_sheets_tool.py` and reachable via `platform_toolsets`. If a cron prompt in `setup-cron-jobs.sh` encodes a skill behavior
   (e.g. "skip the cards section on setup_required"), keep prompt and skill
   consistent in the same commit.
 
@@ -592,7 +599,7 @@ Sheet export tools, so Google Cloud is optional for a cloner.
   Sheet schema tables → Tool surface with JSON examples → Risk table →
   Open decisions → v1 exit criteria as checkboxes. Copy
   `docs/CARD-OPTIMISER-ARCHITECTURE.md`'s shape.
-- `docs/HANDOFF-*.md` is the session-resumption genre: branch state,
+- `docs/HANDOFF-*.md` (none are checked in here; write one when needed) is the session-resumption genre: branch state,
   non-negotiables, what already shipped, implementation checklist,
   verification recipe, PR-body template. Write one whenever work will be
   finished by a different session.
@@ -611,7 +618,7 @@ Keep them small; each has a "what does NOT belong here" rule — respect it
 (M18). Transaction data, insights, category lists live in Supabase; session
 history lives in FTS5.
 
-**Which of them actually load (verified at v0.20.6, 2026-09-01).** Only
+**Which of them actually load (verified at v0.21.0, 2026-09-04).** Only
 `SOUL.md` does. The prompt builder reads `SOUL.md` from `HERMES_HOME`, which
 is exactly where the Dockerfile COPYs it. But `MEMORY.md` and `USER.md` are
 read by the memory store from `HERMES_HOME/memories/` — and `start.sh`
@@ -630,9 +637,7 @@ deploy. Keep writing them correctly; just don't assume they took effect.
   ready-for-review against `main` on
   your fork (the original lives at `alhazjm/kevin-agent`). Merging to `main` deploys to Render.
 - Commits: short imperative subject, blank line, 1–3 sentence body that
-  explains the WHY (and for bug fixes, the root cause). End with the
-  session trailer (`https://claude.ai/code/session_*`) when the session
-  provides one.
+  explains the WHY (and for bug fixes, the root cause).
 - Opportunistic bug fixes found mid-feature may ride along in the active
   PR, but each gets its own line in the PR body with its root cause.
 - PR body states: what changed, why, how it was verified (test count), and
@@ -689,9 +694,10 @@ RLS everywhere: the agent writes with the service key (bypasses RLS,
 server-side only); the PWA authenticates via email OTP and `is_owner()`.
 PWA write policies are deliberately narrow: budgets (0002), transaction
 category updates (0004), loan status flips (0005), sub_overrides (0006).
-Known drift: 0001's `is_owner()` shows the original single email — the
-live function was widened by hand (2026-07-31) to accept both of the owner's
-Gmail addresses; reconcile in the next migration that touches auth.
+If you ever widen `is_owner()` by hand (a second login address), land the
+same change as a new numbered migration too — a live function no migration
+describes is drift, and the next fresh install silently gets different
+access rules.
 
 ### Travel mode + trip pots — design constraints
 
@@ -740,9 +746,9 @@ Gmail addresses; reconcile in the next migration that touches auth.
   nothing written and no bubble. The model's only job during a trip:
   propose the HOME category as always and pass currency / notes /
   payment_method / time / idempotency_key through. Manual foreign entries
-  ("rm33") mean CASH unless the user names YouTrip (the owner, 2026-08-18):
+  ("rm33") mean CASH unless the user names YouTrip (product decision, 2026-08-18):
   no payment method → converted, routed via `orig:`, COUNTED in the month;
-  `payment_method="YouTrip Card"` only when he says so (pot-internal).
+  `payment_method="YouTrip Card"` only when the user says so (pot-internal).
 - 80%/100% bucket alerts dedupe via `trip_nudge_log` keyed on
   (trip, bucket, threshold, budget_at_nudge) — a mid-trip reallocation
   re-arms the nudge.
@@ -823,8 +829,8 @@ windows on the same tile. Cap bands: ok <80%, warning 80–99%, capped
    config placeholders (M4): `__WEBHOOK_SECRET_PLACEHOLDER__` and
    `__OPENAI_KEY_PLACEHOLDER__` (the STT key).
 6. **Memory hygiene trio** (512MB container): Dockerfile sets
-   `MALLOC_ARENA_MAX=2`, explicitly UNINSTALLS `faster-whisper` (its
-   ~150MB model caused the 2026-07-30 OOM; STT is the OpenAI API —
+   `MALLOC_ARENA_MAX=2`, does NOT install the `[voice]` extra that carries
+   `faster-whisper` (its ~150MB model caused the 2026-07-30 OOM; STT is the OpenAI API —
    `gpt-4o-mini-transcribe` — instead), and the Apps Script nightly
    ~04:00 Render restart resets the RSS baseline. `ffmpeg` is installed
    for Edge-TTS voice bubbles (mp3 → OGG/Opus for Telegram send_voice).
@@ -832,7 +838,7 @@ windows on the same tile. Cap bands: ok <80%, warning 80–99%, capped
 8. Gateway runs foreground (`hermes gateway run`) — `gateway start` needs
    systemd, which Docker lacks. Webhook listens on 8644.
 9. `cron.wrap_response: false` in cli-config.yaml suppresses the cron
-   executor's wrapper text — still honored at v0.20.6 (grep
+   executor's wrapper text — still honored at v0.21.0 (grep
    `wrap_response` in `cron/scheduler.py`; it is documented in
    `config_defaults.py` now, default True). Re-verify on SHA bumps.
 10. **Cron tools are allowlisted per platform** since v0.20.x:
@@ -876,7 +882,8 @@ every listed skill exists, the Dockerfile ships the dir),
    behavior class for the logic (happy path, each non-ok status, legacy
    sheet layout if it touches the export path).
 6. New table/column? → schema-change checklist too.
-7. Update the tool count/list in this file.
+7. Update the tool count in this file, `README.md` and `docs/SETUP.md`
+   (a script in the sync PR checked all three; keep them equal).
 
 ### Adding a new config file
 1. Put it in an already-COPY'd directory, or add a COPY line.
@@ -962,7 +969,9 @@ fetches are pre-allowed; download the files once and grep locally):
    without any config change on our side.
 8. A top-level `skills/` directory still exists in the clone (the
    Dockerfile prunes it; the gateway re-seeds from it on every start).
-9. `gateway/run.py` still dispatches skill BUNDLES before skills and still
+9. `pyproject.toml` still defines the `all`, `messaging` and `edge-tts`
+   extras the Dockerfile installs, and `requires-python` still admits 3.11.
+10. `gateway/run.py` still dispatches skill BUNDLES before skills and still
    reads them from `HERMES_HOME/skill-bundles/*.yaml`
    (`agent/skill_bundles.py`); and the unknown-slash-command block still
    exists (it is what makes the bundles load-bearing — if upstream ever
@@ -977,7 +986,7 @@ and present findings — never loosen an anchor to make the build pass.
 string and never raises; status vocabulary from the contracts section (no
 new statuses without a skill consumer); silence contract complete if it
 sends Telegram (M9); tests as per checklist; suite green with the new count
-stated; tool count updated here + AGENTS.md.
+stated; tool count updated in this file, README.md and docs/SETUP.md.
 
 **A bug fix** — commit body names the root cause (not just the symptom); a
 regression test exists that fails on the pre-fix code; no drive-by
@@ -1040,8 +1049,8 @@ options, recommendation first, one screenful max):
 - Tests fail in an area your diff didn't touch: report, don't "fix" the
   test to green.
 - The live Supabase schema doesn't match `supabase/migrations/` (a
-  hand-run SQL change never made it into a migration file): reconcile
-  with the owner before writing code against either.
+  hand-run SQL change never made it into a migration file): stop and
+  reconcile the two before writing code against either.
 - You'd need a secret/credential that isn't in the documented env vars.
 
 **How to ask**: numbered options with your recommendation first and the

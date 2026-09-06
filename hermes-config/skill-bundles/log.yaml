@@ -10,7 +10,7 @@
 # expense-tracker itself — made explicit.
 #
 # Ships via `COPY hermes-config/skill-bundles/ /root/.hermes/skill-bundles/`
-# in the Dockerfile (CLAUDE.md M1). The `name:` becomes the slash command.
+# in the Dockerfile (AGENTS.md M1). The `name:` becomes the slash command.
 name: log
 description: Log an expense by hand — "/log $30 IKEA lunch"
 skills:

@@ -2,7 +2,7 @@
 name: expense-ingest
 description: Slim webhook-only subset of expense-tracker — categorises one Gmail bank/YouTrip transaction and logs it to the Supabase ledger
 version: 1.0.1
-author: Hadi
+author: alhazjm
 license: MIT
 platforms: [linux]
 metadata:
@@ -30,7 +30,7 @@ journal, sweeps, subscriptions, budgets and lending live in
 
 1. **`log_expense` sends the confirmation bubble automatically.** The tool
    sends a Telegram message and links the `message_id` to the row — you do
-   NOT need to call `send_message` or `link_telegram_message` yourself.
+   NOT need to send anything yourself or call `link_telegram_message`.
 
    **When `log_expense` (or `log_expense_pending`) returns `bubble_sent:
    true`, you MUST produce an EMPTY assistant reply.** Do not write any
@@ -133,6 +133,7 @@ if needed**. Do NOT call `log_expense_pending`. Do NOT call
 - Supermarkets (Cold Storage, NTUC, Sheng Siong, Giant) → `Groceries`
 - Marketplaces (Shopee, Lazada, Amazon) → `Groceries`
 - Convenience stores (7-Eleven) → `Personal - Food & Drinks`
+   (Edit this list and the category names to your own supermarkets and categories.)
 
 ### Common merchant heuristics (used when no MerchantMap entry exists yet)
 - BUS/MRT, Grab rides → Personal - Travel
@@ -202,7 +203,7 @@ Inside the tool, one of these signals routes the row:
 - **No signal** (SGD, no `orig:`, not YouTrip — Shopee for home, PayLah to
   a friend, insurance): NORMAL flow, untouched. Currency / pot is the guard
   against "everything during the trip is travel", not the date.
-- **Never routed**: YouTrip top-ups (category `YouTrip Top-up`) — those
+- **Never routed**: YouTrip top-ups (category `YouTrip Top-up` / the transfer category) — those
   get `[trip:]` tags via `link_topup_to_trip` (below); and rows already in
   the trip category.
 - Manual "rm"-style entries never reach this route (they are Telegram

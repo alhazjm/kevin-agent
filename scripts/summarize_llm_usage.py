@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize PEHD LLM usage JSONL files.
+"""Summarize Kevin LLM usage JSONL files.
 
 Usage on Render:
   python scripts/summarize_llm_usage.py /data/llm_usage/usage-2026-05.jsonl
@@ -77,7 +77,7 @@ def _print_table(title: str, rows: list[tuple[str, dict]], limit: int | None = N
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Summarize PEHD LLM usage JSONL.")
+    parser = argparse.ArgumentParser(description="Summarize Kevin LLM usage JSONL.")
     parser.add_argument("paths", nargs="+", help="Usage JSONL path(s), glob patterns allowed.")
     args = parser.parse_args()
 
@@ -110,7 +110,7 @@ def main() -> int:
     cache_total = totals["input"] + totals["cache_read"] + totals["cache_write"]
     cache_pct = (totals["cache_read"] / cache_total * 100) if cache_total else 0.0
 
-    print("PEHD LLM Usage Summary")
+    print("Kevin LLM usage Summary")
     print("======================")
     print(f"Records: {len(records):,}")
     print(f"Days observed: {day_count}")

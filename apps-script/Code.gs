@@ -151,7 +151,7 @@ function checkNewEmails() {
         parsed.raw_from = msg.getFrom();
         parsed.email_date = msg.getDate().toISOString();
 
-        // Time-in-key (PR 4): DBS alerts print the transaction time and
+        // Time-in-key: DBS alerts print the transaction time and
         // parseDBS captures it; UOB alerts carry none, so the email's own
         // arrival time stands in. Either way the SAME email re-processed
         // yields the SAME time (dedup preserved), while two real purchases
@@ -175,7 +175,7 @@ function checkNewEmails() {
         if (parsed.notes === undefined || parsed.notes === null) parsed.notes = "";
         // BND is pegged 1:1 to SGD (Currency Interchangeability Agreement,
         // 1967) and frankfurter/ECB does not list it — so BND used to hit
-        // the fx_failed path EVERY time (J HOTEL, BND 374, 2026-08-29:
+        // the fx_failed path EVERY time (a Brunei hotel, BND 374, 2026-08-29:
         // never logged, and the alert never arrived either — see
         // debugAudit). Convert at par, stamped like any other FX.
         if (parsed.currency === "BND") {
@@ -574,7 +574,7 @@ function convertToSGD(amount, currency) {
  * and sendTelegramAlert SKIPS quietly when the TELEGRAM_* properties are
  * missing — which is exactly how the Supabase audit table stayed empty
  * for a month while 249 rows piled up in the fallback tab and an
- * fx_failed alert (J HOTEL, 2026-08-29) vanished (found 2026-09-01).
+ * fx_failed alert (a Brunei hotel, 2026-08-29) vanished (found 2026-09-01).
  *
  * Prints for each Script Property: set/missing, value length, and
  * whether it has leading/trailing whitespace. Then does a REAL insert
@@ -726,7 +726,7 @@ function computeIdempotencyKey(date, merchant, amount, paymentMethod, time) {
           + String(merchant || "").trim().toUpperCase() + "|"
           + parseFloat(amount).toFixed(2) + "|"
           + String(paymentMethod || "").trim();
-  // Time-in-key (PR 4): appended ONLY when present, so the raw string for
+  // Time-in-key: appended ONLY when present, so the raw string for
   // time-less inputs is byte-identical to the legacy 4-field format and
   // every previously stored key stays valid. Mirrors Python's
   // _compute_idempotency_key — change both together (M17).
@@ -757,7 +757,7 @@ function testIdempotencyKeyParity() {
     ["2026-04-14", "Cold Storage", 45.30, "DBS/POSB card ending 1234",  "", "a2a3de653d223e63"],
     ["2026-04-12", "GRABFOOD",     12.50, "UOB Card ending 5678",       "", "a470ad4b61937830"],
     ["2026-04-10", "Sheng Siong",  23.80, "PayLah! Wallet",             "", "25f16c670462d6c8"],
-    // Time-in-key (PR 4) — same day/merchant/amount, different times,
+    // Time-in-key — same day/merchant/amount, different times,
     // different keys (the KOPITIAM $7.80 incident, 2026-07-25)
     ["2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "16:18",    "5fa19a03294bdad9"],
     ["2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "19:47",    "ad27b42f9385c92a"],

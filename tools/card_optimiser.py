@@ -74,7 +74,7 @@ def read_cards() -> list[dict]:
             "payment_method_pattern": str(r.get("payment_method_pattern", "")).strip(),
             "cycle_start_day": max(1, min(31, cycle_day)),
             "min_spend_bonus": _as_float(r.get("min_spend_bonus")),
-            # bonus_cap was added to the live table by hand around PR #40
+            # bonus_cap was added to the live table by hand before migration 0003
             # (0003 migration makes it reproducible) — calendar-month bonus
             # spend cap in S$; 0 = none/uncapped
             "bonus_cap": _as_float(r.get("bonus_cap")),
@@ -1065,6 +1065,8 @@ def set_category_primary(category: str, card_id: str,
 # (T&Cs verified 2026-07-28; re-check when the quarterly re-verification
 # runs). Substring match against the uppercased merchant string.
 
+# Replace wholesale with your own issuers' lists — these are one deployment's
+# Singapore cards (matched against the uppercased merchant string).
 _YUU_PARTNER_PATTERNS = (
     "GOJEK", "GOPAY", "FOODPANDA", "FP*FOOD", "GUARDIAN", "7-ELEVEN",
     "COLD STORAGE", "CS FRESH", "JASONS", "GIANT", "BUS/MRT", "SIMPLYGO",
@@ -1086,6 +1088,7 @@ _STEER_BIG_ONEOFF_FLOOR = 500.0
 # Earn rates for pattern-steered cards, mirroring the steer-nudge copy
 # ("4 mpd", yuu partner up to 18% ≈ 10 mpd when the month qualifies).
 # Kept next to the pattern tuples so the two stay in sync.
+# Replace wholesale with your own issuers' lists (see docs/SETUP.md, 1.4).
 _PATTERN_STEER_RATES = {"dbs-yuu": 10.0, "uob-pref": 4.0, "hsbc-revo": 4.0}
 
 
@@ -1134,7 +1137,7 @@ def maybe_send_min_spend_nudge(payment_method: str, amount: float,
                                txn_date: str) -> dict:
     """Min-spend tracker nudge, calendar-month based.
 
-    Anti-spam contract (agreed with the owner 2026-07-28): at most (a) ONE
+    Anti-spam contract (design contract, 2026-07-28): at most (a) ONE
     "minimum met ✓" per card per calendar month, fired by the transaction
     that crosses the line, and (b) ONE at-risk warning per card per month,
     only when ≤5 days remain and the card is still short. Deduped through
@@ -1238,7 +1241,7 @@ def maybe_send_steer_nudge(merchant: str, payment_method: str,
     at most once per (merchant pattern, steer target) per calendar month,
     deduped via card_nudge_log sentinel `_steer:<pattern>` (threshold 0).
 
-    the owner explicitly wants steering-back, not point-of-sale advice ("very
+    the design goal is steering-back, not point-of-sale advice ("very
     unlikely I will ask 'which card' before paying"). Rules, in priority
     order: yuu partner not on yuu → yuu; non-partner in-person spend ON
     yuu (the 0.25% trap) → Preferred tap; online-whitelist merchant not on
@@ -1394,7 +1397,7 @@ def get_bonus_pool_status(month: str | None = None) -> dict:
     your issuer's published T&Cs). Bank alerts never reveal the payment
     channel, so pool attribution is by merchant class: online-whitelist
     merchants (_ONLINE_4MPD_PATTERNS) → online pool, everything else →
-    contactless — under the owner's standing assumptions (every in-person
+    contactless — under this deployment's standing assumptions (every in-person
     charge is Apple Pay; online charges are non-recurring). Any other
     card with a bonus_cap (hsbc-revo, S$1,000) reports a single pool.
     Cards without a bonus_cap are omitted entirely.

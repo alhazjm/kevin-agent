@@ -6,8 +6,8 @@ description: Onboard a new transaction-alert email source (new bank card, iPhone
 # New Alert Source
 
 The repeatable build sequence behind every alert source (DBS, UOB, HSBC
-PR #55, YouTrip-via-Shortcuts). One hard precondition and eight steps.
-The exemplar to copy is the HSBC parser commit (PR #55).
+YouTrip-via-Shortcuts). One hard precondition and eight steps.
+The exemplar to copy is the HSBC parser commit (the HSBC parser commit).
 
 **Precondition — a real, live sample email.** Never build a parser from
 a screenshot of a template or a hand-typed example: field formats
@@ -56,7 +56,7 @@ live bubble after deploy.
    the payment_method string is known from the live sample.
 6. **Config docs**: `hermes-config/USER.md` card table row;
    `hermes-config/MEMORY.md` payment-method example if the string shape
-   is new. Small — these load every turn (M18).
+   is new. Small — sized as if they loaded every turn (M18).
 7. **PWA**: nothing needed for basic tiles (the cards fetch picks up
    the new row); livery only if github.com/alhazjm/cards has a matching
    entry — otherwise the paper fallback renders.

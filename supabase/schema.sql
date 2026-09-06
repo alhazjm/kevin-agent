@@ -236,7 +236,7 @@ end $$;
 
 -- Budget write policies for the PWA editor (rename = UPDATE, row delete =
 -- DELETE, cell save = INSERT/UPDATE upsert). 0001 created read-only
--- policies; the insert/update pair was applied by hand from the PR #33
+-- policies; the insert/update pair was applied by hand before this file existed
 -- setup SQL and never landed in a migration — this makes all three
 -- reproducible. Idempotent: an already-existing policy name is skipped, and
 -- permissive policies OR together, so hand-applied variants coexist safely.
@@ -265,7 +265,7 @@ exception when duplicate_object then null; end $$;
 -- =========================================================================
 
 -- cards.bonus_cap — the calendar-month bonus spend cap in S$ (0 = none).
--- This column was added to the LIVE table by hand around PR #40
+-- This column was added to the LIVE table by hand before migration 0003
 -- (`alter table cards add column ... ; update ... uob-pref = 600`) and
 -- later hsbc-revo = 1000 alongside the card_strategy seed rows. This makes
 -- it reproducible for a fresh database. Idempotent — safe to run on the

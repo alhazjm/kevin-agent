@@ -8,12 +8,12 @@ not a reliable runtime contract.
 
 History of this patch:
 
-v1 (PR #16) zeroed `final_response` at the no-tool-calls branch. Necessary
+v1 zeroed `final_response` at the no-tool-calls branch. Necessary
 but not sufficient: the nudge/retry cascade ran BEFORE the gateway's
 `if response:` gate, so zeroing alone produced ~6 user-visible warnings
 plus a fallback apology per expense.
 
-v2 (PR #17) added a `break` out of the loop at the same anchor, still
+v2 added a `break` out of the loop at the same anchor, still
 setting `final_response = ""`.
 
 v3 (2026-09-01, hermes-agent 0.10 -> 0.20.6) — THREE changes, each forced
@@ -35,7 +35,7 @@ by a verified upstream change at SHA 5fc308a7 (tag v2026.8.27):
      (gateway/run.py) — and the FIRST of its two call sites runs inside
      `TurnRunner.run_sync`, BEFORE any silence predicate is consulted.
      Our ingest route is `deliver: telegram`, so v2's `""` would have put
-     one junk warning bubble in the owner's chat per logged expense: the exact
+     one junk warning bubble in the user's Telegram chat per logged expense: the exact
      M9 symptom this patch exists to prevent. We therefore emit
      `NO_REPLY` — the value of `response_filters.SILENT_REPLY_TOKEN` and
      a member of `LIVE_GATEWAY_SILENT_MARKERS`, so it is swallowed by the
@@ -57,7 +57,7 @@ by a verified upstream change at SHA 5fc308a7 (tag v2026.8.27):
      MEDIA: tags the same way — see gateway/run.py "Scope the scan to
      THIS turn's tool results only ... (Fixes #34608)".
 
-Placement (the owner's call, 2026-09-01): the injection goes BEFORE the
+Placement (decided 2026-09-01): the injection goes BEFORE the
 `codex_responses` / `finish_reason == "incomplete"` continuation block
 rather than at the no-tool-calls branch ~780 lines below it. Our
 deployment runs that leg — provider "custom" against api.openai.com is
@@ -85,7 +85,7 @@ count == 1 at the pinned SHA). If upstream refactors it the script exits
 non-zero and fails the Docker build — loud failure, never silent
 breakage on Render. When that happens, bump HERMES_AGENT_SHA
 deliberately, re-inspect agent/conversation_loop.py for the new anchor,
-and update this script. See CLAUDE.md "hermes-agent SHA bump checklist".
+and update this script. See AGENTS.md "hermes-agent SHA bump checklist".
 
 Local sanity run: set PEHD_PATCH_TARGET=/path/to/conversation_loop.py to
 patch a downloaded copy instead of the container path.
@@ -103,7 +103,7 @@ TARGET = Path(
 
 # Anchor: the head of the codex_responses "incomplete" continuation block.
 # 12-space indent, inside the main `while` of run_conversation(). Verified
-# exactly once at HERMES_AGENT_SHA=5fc308a7 (0 matches in run_agent.py).
+# exactly once at HERMES_AGENT_SHA=5fc308a7, re-verified at 29112bef / v0.21.0 (0 matches in run_agent.py).
 ANCHOR = '            if agent.api_mode == "codex_responses" and finish_reason == "incomplete":'
 
 # Injection: prepended BEFORE the anchor (see the placement note above), so
@@ -190,7 +190,7 @@ def main() -> int:
             "Bump HERMES_AGENT_SHA deliberately, re-inspect "
             "agent/conversation_loop.py for the new anchor, and update "
             "ANCHOR + INJECTION in this script. "
-            "See CLAUDE.md 'hermes-agent SHA bump checklist'.",
+            "See AGENTS.md 'hermes-agent SHA bump checklist'.",
             file=sys.stderr,
         )
         return 3

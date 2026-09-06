@@ -2,7 +2,7 @@
 name: card-optimiser
 description: Recommends the best credit card per category, tracks monthly cap progress, and scores miles earned vs optimal
 version: 1.5.0
-author: Hadi
+author: alhazjm
 license: MIT
 platforms: [linux]
 metadata:

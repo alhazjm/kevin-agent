@@ -18,7 +18,7 @@ terminal:
 #                        MEMORY.md / create skills, but /root/.hermes is
 #                        rebuilt on every deploy, so anything it writes is
 #                        thrown away. Our tier-2 memory is hand-curated on
-#                        purpose (CLAUDE.md M18). There is no per-platform
+#                        purpose (AGENTS.md M18). There is no per-platform
 #                        switch — this is global, Telegram included.
 #   title_generation   — auto-names sessions on the MAIN model. Webhook
 #                        sessions are NOT excluded upstream (only cron and
@@ -50,7 +50,7 @@ lsp:
 model_catalog:
   enabled: false
 
-# Voice STT — explicit, config-keyed, no auto-detect. After PR #63 evicted
+# Voice STT — explicit, config-keyed, no auto-detect. After local whisper was evicted
 # local faster-whisper, the auto-detect chain was supposed to fall through
 # to the OpenAI API via process-env OPENAI_API_KEY, but the live gateway
 # still reported "no STT provider" (2026-07-30 ~22:10 and ~22:49 SGT).
@@ -70,7 +70,7 @@ stt:
 # job, send me a new message..." footer). For a single-user deployment
 # the footer's unsubscribe affordance is noise — we already know the
 # "stop reminder X" phrase and can list jobs via `hermes cron list`.
-# Still honoured at v0.20.6 (cron/scheduler.py, default True).
+# Still honoured at v0.21.0 (cron/scheduler.py, default True).
 cron:
   wrap_response: false
 
@@ -100,7 +100,7 @@ platforms:
             Notes: {notes}
             Idempotency key: {idempotency_key}
 
-            Use the expense-tracker skill to categorize and log this transaction.
+            Use the expense-ingest skill to categorize and log this transaction.
             When you call log_expense, pass source="email" (this row originated
             from the Gmail webhook, not from a manual user message), pass
             time="{time}", AND pass idempotency_key="{idempotency_key}" copied

@@ -1552,10 +1552,10 @@ class TestDetectSubscriptionCreep:
 
         cat = "Insurance - Personal (Prudential)"
         records = self._make_records([
-            ("2026-03-05", "Prudential 72279942", 100.00, cat, "email"),
-            ("2026-03-06", "Prudential 83180053", 150.00, cat, "email"),
-            ("2026-04-05", "Prudential 72279942", 100.00, cat, "email"),
-            ("2026-04-06", "Prudential 83180053", 150.00, cat, "email"),
+            ("2026-03-05", "Prudential 10000001", 100.00, cat, "email"),
+            ("2026-03-06", "Prudential 10000002", 150.00, cat, "email"),
+            ("2026-04-05", "Prudential 10000001", 100.00, cat, "email"),
+            ("2026-04-06", "Prudential 10000002", 150.00, cat, "email"),
         ])
 
         with patch("tools.sheets_client.get_spreadsheet") as mock_ss:
@@ -3211,7 +3211,7 @@ class TestIdempotencyKeyParity:
         ("2026-04-14", "Cold Storage", 45.30, "DBS/POSB card ending 1234", "", "a2a3de653d223e63"),
         ("2026-04-12", "GRABFOOD",     12.50, "UOB Card ending 5678",      "", "a470ad4b61937830"),
         ("2026-04-10", "Sheng Siong",  23.80, "PayLah! Wallet",            "", "25f16c670462d6c8"),
-        # Time-in-key (PR 4): same day/merchant/amount, different times,
+        # Time-in-key: same day/merchant/amount, different times,
         # different keys - the KOPITIAM $7.80 incident, 2026-07-25
         ("2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "16:18", "5fa19a03294bdad9"),
         ("2026-07-25", "KOPITIAM @ RAFFLES",  7.80,  "UOB Card ending 5678", "19:47", "ad27b42f9385c92a"),

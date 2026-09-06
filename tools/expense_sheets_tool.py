@@ -27,8 +27,8 @@ Registers tools with the Hermes tool registry:
   - get_insights:                Read stored insights (tier-4 memory)
   - generate_daily_insight:      Deterministic daily insight writer (cron; auto:* keys)
   - render_budget_chart:         Render a budget chart and deliver to Telegram
-  - append_journal_entry:        Save user's freeform reply to the Journal tab
-  - get_journal_entries:         Read Journal tab entries (most recent first)
+  - append_journal_entry:        Save user's freeform reply to the journal table
+  - get_journal_entries:         Read journal table entries (most recent first)
   - sweep_missed_transactions:   Diff webhook_log vs transactions to find unlogged emails
   - export_sheet_backup:         Nightly rebuild of the Sheet tabs from Supabase
   - archive_year_snapshot:       Write-once Archive-<year> cold-storage tab (Jan-1 cron)
@@ -107,22 +107,22 @@ def _sheet_export_configured() -> bool:
 
 # Category-keyword → emoji table for the confirmation bubble prefix. First
 # substring hit against the lowercased category wins, so put specific
-# keywords (e.g. "haku litter") ABOVE general ones (e.g. "haku"). Pure
+# keywords (e.g. "miso litter") ABOVE general ones (e.g. "miso"). Pure
 # visual scannability — no behaviour depends on the emoji.
 _CATEGORY_EMOJI_KEYWORDS = [
-    ("haku food",       "🍖"),
-    ("haku litter",     "🐾"),
-    ("haku grooming",   "✂️"),
-    ("haku dental",     "🦷"),
-    ("haku",            "🐱"),
-    ("nabs food",       "🥘"),
-    ("nabs travel",     "✈️"),
-    ("nabs phone",      "📱"),
-    ("nabs clothes",    "👗"),
-    ("nabs dental",     "🦷"),
-    ("nabs hair",       "💇"),
-    ("nabs self",       "📚"),
-    ("nabs",            "💕"),
+    ("miso food",       "🍖"),
+    ("miso litter",     "🐾"),
+    ("miso grooming",   "✂️"),
+    ("miso dental",     "🦷"),
+    ("miso",            "🐱"),
+    ("sam food",       "🥘"),
+    ("sam travel",     "✈️"),
+    ("sam phone",      "📱"),
+    ("sam clothes",    "👗"),
+    ("sam dental",     "🦷"),
+    ("sam hair",       "💇"),
+    ("sam self",       "📚"),
+    ("sam",            "💕"),
     ("personal - food", "🍜"),
     ("food",            "🍜"),
     ("drink",           "🍜"),
@@ -254,7 +254,7 @@ def _send_telegram_photo(photo_url: str, caption: str, chat_id: str = "") -> dic
 LOG_EXPENSE_SCHEMA = {
     "name": "log_expense",
     "description": (
-        "Log a new expense transaction to the Google Sheet. Automatically "
+        "Log a new expense transaction to the ledger (Supabase Postgres). Automatically "
         "sends a Telegram confirmation bubble and links the message_id to "
         "the transaction row (enabling reply-to-message edits). "
         "Do NOT send the confirmation yourself — the tool handles it. "
@@ -346,7 +346,7 @@ LOG_EXPENSE_SCHEMA = {
             "time": {
                 "type": "string",
                 "description": (
-                    "Transaction time, 24h SGT, e.g. '19:47' or '19:47:03'. "
+                    "Transaction time, 24h local time, e.g. '19:47' or '19:47:03'. "
                     "ALWAYS pass this through when the webhook payload "
                     "carries a Time field — it disambiguates two real "
                     "purchases at the same merchant for the same amount on "
@@ -781,8 +781,8 @@ LOG_EXPENSE_PENDING_SCHEMA = {
         "Log a transaction with category='UNCATEGORIZED' and send a Telegram "
         "ask-prompt asking the user which category to use. The ask-prompt "
         "includes the txn_id so the user's reply resolves back to the row. "
-        "Use this instead of log_expense when categorisation is ambiguous — "
-        "always-ask merchants (supermarkets, marketplaces, convenience), "
+        "Use this instead of log_expense when categorisation is genuinely ambiguous (NOT for supermarkets / marketplaces / convenience stores — those default to their category via log_expense and the user corrects by reply) — "
+        ""
         "PayLah!/PayNow transfers to an individual, or when your confidence "
         "is below ~90%. You provide the numbered category options as a list. "
         "When the user replies with a choice, call edit_expense(txn_id=..., "
@@ -849,7 +849,7 @@ LOG_EXPENSE_PENDING_SCHEMA = {
             "time": {
                 "type": "string",
                 "description": (
-                    "Transaction time, 24h SGT. Same contract as "
+                    "Transaction time, 24h local time. Same contract as "
                     "log_expense: pass the webhook payload's Time field "
                     "through when present."
                 ),
@@ -1297,7 +1297,7 @@ LINK_TELEGRAM_MESSAGE_SCHEMA = {
     "name": "link_telegram_message",
     "description": (
         "Attach a Telegram message_id to an already-logged transaction. "
-        "Call this immediately after sending a confirmation bubble for a freshly "
+        "Normally unnecessary — log_expense links the bubble itself. Use only to repair a row whose link failed for a freshly "
         "logged expense — pass the `txn_id` returned by `log_expense` and the "
         "`message_id` of the bubble Telegram just sent. This is what makes "
         "reply-to-message edits possible later."
@@ -1390,7 +1390,7 @@ registry.register(
 LOOKUP_MERCHANT_CATEGORY_SCHEMA = {
     "name": "lookup_merchant_category",
     "description": (
-        "Check the MerchantMap tab for a learned merchant → category mapping. "
+        "Check the merchant_map table for a learned merchant → category mapping. "
         "Call this BEFORE asking the user to disambiguate a category — if a "
         "mapping exists, use it directly instead of asking. Returns the matching "
         "mapping (with `merchant_pattern` and `category`) or null."
@@ -1430,7 +1430,7 @@ registry.register(
 LEARN_MERCHANT_MAPPING_SCHEMA = {
     "name": "learn_merchant_mapping",
     "description": (
-        "Persist a merchant → category mapping to the MerchantMap tab so future "
+        "Persist a merchant → category mapping to the merchant_map table so future "
         "transactions matching this pattern get categorised automatically. Call "
         "this after the user corrects a categorisation (e.g. moves a Shopee "
         "transaction to Miso Litter) so you don't have to ask again next time. "
@@ -1636,9 +1636,9 @@ registry.register(
 WRITE_INSIGHT_SCHEMA = {
     "name": "write_insight",
     "description": (
-        "Persist a derived insight to the Insights tab for future reference. "
+        "Persist a derived insight to the insights table for future reference. "
         "Call this after generating a spending report or summary to save key "
-        "findings (e.g. 'the owner overspent Dining by 22% in week 14'). Future "
+        "findings (e.g. 'Dining overspent by 22% in week 14'). Future "
         "report runs read stored insights first, so summaries build on prior "
         "conclusions instead of recomputing from scratch."
     ),
@@ -1689,7 +1689,7 @@ registry.register(
 GET_INSIGHTS_SCHEMA = {
     "name": "get_insights",
     "description": (
-        "Read stored insights from the Insights tab. Call this BEFORE "
+        "Read stored insights from the insights table. Call this BEFORE "
         "generating a new spending report to build on prior conclusions. "
         "Filter by month and/or category. Returns most recent first."
     ),
@@ -1882,7 +1882,7 @@ RENDER_BUDGET_CHART_SCHEMA = {
         "deliver it as a photo to the user's Telegram. Use when the user "
         "asks for a visual snapshot, chart, or 'show me' their spending "
         "distribution or budget vs actual. The tool sends the photo "
-        "automatically via the Bot API \u2014 do NOT call send_message after. "
+        "automatically via the Bot API \u2014 do NOT send any message yourself after. "
         "When bubble_sent=true, emit an EMPTY assistant reply."
     ),
     "parameters": {
@@ -1995,12 +1995,12 @@ registry.register(
 APPEND_JOURNAL_ENTRY_SCHEMA = {
     "name": "append_journal_entry",
     "description": (
-        "Save a freeform user reply as a journal entry in the Journal tab. "
+        "Save a freeform user reply as a journal entry in the journal table. "
         "Call this ONLY when the user replies to the '💭 Journal:' prompt "
         "of a bot summary, or explicitly says to journal/note something "
         "('journal this', 'note for the diary'). A journal entry is a "
         "diary line — narrative, feelings, context ('was stressful today', "
-        "'bought the $45 meal because Sam visiting'). NEVER call it for: "
+        "'bought the $45 meal because a friend was visiting'). NEVER call it for: "
         "questions to the agent, budget/category/edit/delete instructions, "
         "category picks after log_expense_pending, forwarded bank alerts, "
         "or any message the user expects an ACTION from — those go through "
@@ -2038,7 +2038,7 @@ APPEND_JOURNAL_ENTRY_SCHEMA = {
                 "type": "string",
                 "description": (
                     "Optional short tags extracted from the reply, comma-"
-                    "separated (e.g. 'nabs,promo,regret'). Keep to 1-3. "
+                    "separated (e.g. 'sam,promo,regret'). Keep to 1-3. "
                     "Leave empty if nothing obvious stands out."
                 ),
                 "default": "",
@@ -2082,11 +2082,11 @@ registry.register(
 GET_JOURNAL_ENTRIES_SCHEMA = {
     "name": "get_journal_entries",
     "description": (
-        "Read journal entries from the Journal tab, most recent first. "
+        "Read journal entries from the journal table, most recent first. "
         "Filter by exact date (YYYY-MM-DD) or month (YYYY-MM). Use when "
         "generating summaries/reports that should reference the user's "
         "own narrative notes, or when the user asks 'what did I write on "
-        "<date>?'. Returns an empty list if the Journal tab doesn't exist "
+        "<date>?'. Returns an empty list if the journal table doesn't exist "
         "yet (pre-experiment state)."
     ),
     "parameters": {
@@ -2132,7 +2132,7 @@ registry.register(
 #
 # Recovery path for when the LLM API returns 529 / times out and the parsed
 # bank email never reaches Transactions. The Apps Script audits every parsed
-# email into the WebhookLog tab before firing the webhook, so this tool can
+# email into the webhook_log table before firing the webhook, so this tool can
 # diff WebhookLog against the ledger by idempotency_key and surface anything
 # that was dropped.
 #
@@ -2142,7 +2142,7 @@ registry.register(
 SWEEP_MISSED_TRANSACTIONS_SCHEMA = {
     "name": "sweep_missed_transactions",
     "description": (
-        "Compare the WebhookLog tab (every parsed bank email, written by "
+        "Compare the webhook_log table (every parsed bank email, written by "
         "the Apps Script before firing the webhook) against the Transactions "
         "tab to find entries that were parsed but never logged — typically "
         "because the LLM returned 529, timed out, or hit a rate limit. "
@@ -2681,15 +2681,15 @@ registry.register(
 GET_ACTIVE_TRAVEL_MODE_SCHEMA = {
     "name": "get_active_travel_mode",
     "description": (
-        "Return the active TravelMode row (the trip whose date range "
-        "contains today). Use as the FIRST step when an FX-converted "
-        "(non-SGD) transaction arrives — if `active=true`, the trip's "
-        "`trip_category` becomes the Budget-tab category for the txn, and "
-        "you pick a bucket (food/transport/flight/activities/misc/...) to "
-        "stamp into Notes as `[bucket:X]` per the skill rules. Returns "
-        "`active=false` when no trip covers today's date — fall back to "
-        "the normal categorisation flow. Optional `as_of` (YYYY-MM-DD) "
-        "to query a specific date instead of today."
+        "Return the active travel_mode row (the trip whose date range "
+        "contains today). Trip ROUTING happens INSIDE log_expense / "
+        "log_expense_pending — do NOT call this before logging a spend, "
+        "and do NOT pick the trip category or a [bucket:X] tag yourself. "
+        "Use it only after a YouTrip top-up is logged (to decide which "
+        "trip to link with link_topup_to_trip) or when the user asks about "
+        "the active trip. Returns `active=false` when no trip covers the "
+        "date. Optional `as_of` (YYYY-MM-DD) to query a specific date "
+        "instead of today."
     ),
     "parameters": {
         "type": "object",

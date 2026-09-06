@@ -2,7 +2,7 @@
 name: budget-manager
 description: Handles budget queries, warnings, reallocation, and the guilt-free calculator
 version: 3.1.0
-author: Hadi
+author: alhazjm
 license: MIT
 platforms: [linux]
 metadata:

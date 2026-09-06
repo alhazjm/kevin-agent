@@ -23,10 +23,10 @@ the ledger only through this ritual, as `source='backfill'`.
 2. Run, from the repo root:
 
    ```
-   py -V:3.11 recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
+   python recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
    ```
 
-   First run only: `py -V:3.11 -m pip install pypdf` (the sole
+   First run only: `pip install pypdf` (the sole
    dependency, imported lazily for PDF text extraction).
 
    Credentials come from the repo-root `.env` (`SUPABASE_URL`,
