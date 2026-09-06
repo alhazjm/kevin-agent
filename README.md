@@ -54,7 +54,7 @@ sequenceDiagram
     K->>DB: edit the row, learn the mapping
 ```
 
-A weekly sweep diffs `webhook_log` against the ledger, so anything that fell out between steps 3 and 8 gets reported rather than lost.
+A weekly sweep diffs `webhook_log` against the ledger, so anything that fell out between the POST and the ledger insert gets reported rather than lost.
 
 ---
 
@@ -152,7 +152,7 @@ Cron is one of *several* invocation paths here (six scheduled jobs), not the who
 
 ### The three tier-2 files
 
-Small on purpose. Each carries an explicit *"what does NOT belong here"* section: transaction data, derived insights, budget numbers and category lists live in the database, never in the prompt.
+Small on purpose. `MEMORY.md` carries an explicit *"what does NOT belong here"* list and each template opens with a note on what to keep out: transaction data, derived insights, budget numbers and category lists live in the database, never in the prompt.
 
 | File | Contents | Why it's separate |
 |---|---|---|
@@ -199,7 +199,7 @@ Cron-invoked prompt variant over the same toolset: the evening review's attentio
 
 ### `weekly-summary` — reports
 
-Friday summary with a "cards this month" section; 1st-of-month final report + miles scorecard; subscription-creep detection (excludes statement-import rows).
+Friday summary with a "cards this month" section; 1st-of-month final report + miles scorecard. (Subscription-creep detection lives in `expense-tracker` and the dashboard; no cron calls it.)
 
 ### Repo-side skills (Claude Code, never shipped)
 
@@ -233,17 +233,18 @@ A different species: workflows in [`.claude/skills/`](.claude/skills/) run by a 
 
 **→ [`docs/SETUP.md`](docs/SETUP.md)** is the real guide: what to sign up for, every credential, what to change because it's hardcoded, a verification ladder, and a troubleshooting table. Budget an afternoon.
 
-The one architectural fact that makes self-hosting sane: **every credential stays in accounts you own** — your Gmail runs the Apps Script (your own script on your own mailbox needs no OAuth app verification), your Supabase holds the data, your Render runs the agent, your bot talks to you. There is no service in the middle, and nothing here phones home.
+The one architectural fact that makes self-hosting sane: **every credential stays in accounts you own** — your Gmail runs the Apps Script (your own script on your own mailbox needs no OAuth app verification), your Supabase holds the data, your Render runs the agent, your bot talks to you. There is no service in the middle. Two outbound flows to know about: transaction text goes to the LLM endpoint *you* configure — which can be a local one — and foreign-currency conversions send amount, currency and date (never merchant text) to `frankfurter.dev` for the ECB rate.
 
 You need four accounts: **Supabase, Telegram, OpenAI, Render.** That's it — Google Cloud and a spreadsheet are an optional backup, not a dependency.
 
 1. **Supabase** — free project; put your email in `is_owner()`, then paste [`supabase/schema.sql`](supabase/schema.sql) into the SQL editor once. One paste, not eight files.
-2. **Render** — deploy the Dockerfile as a web service with a 1 GB disk and nine env vars (seven required).
-3. **The PWA** — paste your project URL + publishable key into two files, publish `pwa/` as a static site.
-4. **Apps Script** — paste [`Code.gs`](apps-script/Code.gs) into a script on *your* Google account, set Script Properties, run `setupTrigger()`. This needs no Google Cloud project. Skip it entirely and log by chat instead.
-5. **Your banks** — the parsers are regexes for specific alert layouts. A different bank means a new parser *and* its Python mirror in [`tests/test_email_parser.py`](tests/test_email_parser.py), changed together.
-6. **Optional: card optimiser** — insert your cards' earn rates, caps, and cycle start days. Until then every card tool politely returns `setup_required`.
-7. **Optional: the Sheet backup** — a Google Cloud service account and a spreadsheet buy you a human-browsable copy rebuilt nightly.
+2. **Telegram** — two messages to @BotFather get you a bot token; your numeric user id gates who the bot listens to.
+3. **Render** — deploy the Dockerfile as a web service with a 1 GB disk and nine env vars (seven required).
+4. **The PWA** — paste your project URL + publishable key into two files, publish `pwa/` as a static site.
+5. **Apps Script** — paste [`Code.gs`](apps-script/Code.gs) into a script on *your* Google account, set Script Properties, run `setupTrigger()`. This needs no Google Cloud project. Skip it entirely and log by chat instead.
+6. **Your banks** — the parsers are regexes for specific alert layouts. A different bank means a new parser *and* its Python mirror in [`tests/test_email_parser.py`](tests/test_email_parser.py), changed together.
+7. **Optional: card optimiser** — insert your cards' earn rates, caps, and cycle start days. Until then every card tool politely returns `setup_required`.
+8. **Optional: the Sheet backup** — a Google Cloud service account and a spreadsheet buy you a human-browsable copy rebuilt nightly.
 
 Swapping the defaults: the **model** is a `base_url` edit away from any OpenAI-compatible provider, the **host** is any Docker runner with a persistent disk, and the **chat platform** is the one genuinely wired-in piece — see [Swapping the pieces](docs/SETUP.md#swapping-the-pieces) for the honest cost of each.
 
