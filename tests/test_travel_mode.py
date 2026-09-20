@@ -964,6 +964,199 @@ class TestMaybeSendTripBucketNudge:
         assert "boom" in result["error"]
 
 
+class TestRouteForTrip:
+    """The deterministic trip router (2026-08-17): the TOOL decides trip
+    routing inside log_expense — YouTrip payment or an `orig:` FX trace
+    during an active trip → trip category + [bucket:X] derived from the
+    PROPOSED home category. SGD/no-signal spends stay home; top-ups and
+    already-trip rows are never routed; never raises."""
+
+    ACTIVE = {
+        "active": True, "as_of": "2026-04-30", "label": "ID Apr 2026",
+        "trip_category": "Travel - ID 2026-04",
+        "budget_map": {"food": 450.0}, "total_budget": 2000.0,
+        "notes": "", "overlap_warning": None,
+    }
+
+    @pytest.fixture(autouse=True)
+    def _travel_db(self):
+        # route_for_trip consults category_meta (fixed-bill guard) and
+        # resolve_category (the trip category must be a real budgets row).
+        # Default: no fixed bills, every category resolves to itself.
+        from tools import travel_mode
+        db = MagicMock()
+        db.read_category_kinds.return_value = {}
+        db.resolve_category.side_effect = lambda c: {"match": c}
+        db._normalize_category.side_effect = lambda s: str(s or "").strip().casefold()
+        with patch.object(travel_mode, "supabase_client", db):
+            self.travel_db = db
+            yield db
+
+    def _route(self, **kw):
+        from tools import travel_mode
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          return_value=kw.pop("_trip", self.ACTIVE)):
+            return travel_mode.route_for_trip(**kw)
+
+    def test_fixed_bill_never_routed_even_with_orig(self):
+        # Adversarial-review catch: Anthropic bills in USD mid-trip carried
+        # an orig: trace and would have been swept into the trip's misc
+        # bucket, and a user correction could never stick.
+        self.travel_db.read_category_kinds.return_value = {"anthropic": "fixed"}
+        r = self._route(txn_date="2026-04-30", proposed_category="Anthropic",
+                        payment_method="DBS/POSB card ending 1234",
+                        notes="orig: USD 20.00 @ 1.290000 (frankfurter 2026-04-30)",
+                        currency="SGD")
+        assert r["applied"] is False
+        assert r["reason"] == "fixed_bill"
+        assert r["category"] == "Anthropic"
+
+    def test_unknown_trip_category_falls_back_to_home(self):
+        # A conversationally-created trip with no budgets row must not turn
+        # every spend into unknown_category refusals — the home category
+        # lands instead.
+        self.travel_db.resolve_category.side_effect = lambda c: {"match": None}
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="Personal - Food & Drinks",
+                        payment_method="YouTrip card", notes="", currency="SGD")
+        assert r["applied"] is False
+        assert r["reason"] == "trip_category_unknown"
+        assert r["category"] == "Personal - Food & Drinks"
+
+    def test_trip_category_snaps_to_canonical_spelling(self):
+        self.travel_db.resolve_category.side_effect = lambda c: {"match": "Travel - ID 2026-04"}
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="Personal - Food & Drinks",
+                        payment_method="YouTrip card", notes="", currency="SGD")
+        assert r["applied"] is True
+        assert r["category"] == "Travel - ID 2026-04"
+
+    def test_inactive_not_applied(self):
+        r = self._route(_trip={"active": False, "as_of": "2026-04-20",
+                               "all_rows_count": 1},
+                        txn_date="2026-04-20",
+                        proposed_category="Personal - Food & Drinks",
+                        payment_method="YouTrip", notes="", currency="SGD")
+        assert r["applied"] is False
+        assert r["reason"] == "no_active_trip"
+        assert r["category"] == "Personal - Food & Drinks"
+        assert r["notes"] == ""
+
+    def test_youtrip_signal_routes_with_bucket_from_home_category(self):
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="Personal - Food & Drinks",
+                        payment_method="YouTrip card",
+                        notes="warung kopi", currency="SGD")
+        assert r["applied"] is True
+        assert r["signal"] == "youtrip"
+        assert r["category"] == "Travel - ID 2026-04"
+        assert r["from_category"] == "Personal - Food & Drinks"
+        assert r["bucket"] == "food"
+        assert r["notes"] == "[bucket:food] warung kopi"
+        assert r["trip_label"] == "ID Apr 2026"
+
+    def test_orig_signal_routes_merchantmap_category_into_bucket(self):
+        # The Gojek-in-KL fix: a MerchantMap hit ("Personal - Travel") no
+        # longer beats travel mode — it decides the BUCKET (transport).
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="Personal - Travel",
+                        payment_method="DBS/POSB card ending 1234",
+                        notes="orig: MYR 33.00 @ 0.313220 (frankfurter 2026-04-30)",
+                        currency="SGD")
+        assert r["applied"] is True
+        assert r["signal"] == "orig"
+        assert r["category"] == "Travel - ID 2026-04"
+        assert r["bucket"] == "transport"
+        assert r["notes"].startswith("[bucket:transport] orig: MYR 33.00")
+
+    def test_sgd_no_signal_stays_home(self):
+        # Shopee for home / PayLah to a friend mid-trip: currency is the
+        # guard, not the date.
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="Personal - Others",
+                        payment_method="PayLah! Wallet", notes="", currency="SGD")
+        assert r["applied"] is False
+        assert r["reason"] == "no_signal"
+        assert r["category"] == "Personal - Others"
+        assert r["notes"] == ""
+
+    def test_topup_guard(self):
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="youtrip top-up",
+                        payment_method="DBS/POSB card ending 1234",
+                        notes="orig: MYR 1.00 @ 0.3", currency="SGD")
+        assert r["applied"] is False
+        assert r["reason"] == "topup_guard"
+
+    def test_already_trip_guard(self):
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="travel - id 2026-04",
+                        payment_method="YouTrip", notes="", currency="SGD")
+        assert r["applied"] is False
+        assert r["reason"] == "already_trip"
+
+    def test_existing_bucket_tag_respected(self):
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="Personal - Food & Drinks",
+                        payment_method="YouTrip",
+                        notes="[bucket:lodging] hostel", currency="SGD")
+        assert r["applied"] is True
+        assert r["bucket"] == "lodging"
+        assert r["notes"] == "[bucket:lodging] hostel"
+
+    def test_unconverted_foreign_currency_counts_as_orig_signal(self):
+        r = self._route(txn_date="2026-04-30",
+                        proposed_category="Personal - Food & Drinks",
+                        payment_method="", notes="", currency="MYR")
+        assert r["applied"] is True
+        assert r["signal"] == "orig"
+
+    def test_exception_not_applied(self):
+        from tools import travel_mode
+        with patch.object(travel_mode, "get_active_travel_mode",
+                          side_effect=RuntimeError("db down")):
+            r = travel_mode.route_for_trip(
+                txn_date="2026-04-30", proposed_category="Personal - Food & Drinks",
+                payment_method="YouTrip", notes="x", currency="SGD")
+        assert r["applied"] is False
+        assert r["reason"] == "exception"
+        assert "db down" in r["error"]
+        assert r["category"] == "Personal - Food & Drinks"
+        assert r["notes"] == "x"
+
+
+class TestBucketForCategory:
+    def test_keyword_table(self):
+        from tools.travel_mode import _bucket_for_category
+        table = {
+            "Personal - Food & Drinks": "food",
+            "Groceries": "food",
+            "Dining Out": "food",
+            "Personal - Travel": "transport",
+            "Transport": "transport",
+            "Grab / Taxi": "transport",
+            "Clothing": "shopping",
+            "Shopping": "shopping",
+            "Miscellaneous": "shopping",
+            "Beauty": "shopping",
+            "Gifts": "shopping",
+            "Health & Medical": "health",
+            "Dental": "health",
+            "Pharmacy": "health",
+            "Hotel": "lodging",
+            "Accommodation": "lodging",
+            "Insurance": "misc",
+            "UNCATEGORIZED": "misc",
+            "": "misc",
+        }
+        for name, expected in table.items():
+            assert _bucket_for_category(name) == expected, name
+
+    def test_case_insensitive(self):
+        from tools.travel_mode import _bucket_for_category
+        assert _bucket_for_category("PERSONAL - FOOD") == "food"
+
+
 class TestHandlers:
     """The 3 handlers in expense_sheets_tool.py delegate to travel_mode.
     These tests verify arg pass-through + JSON encoding."""
@@ -1067,3 +1260,31 @@ class TestHandlers:
             result = json.loads(handle_link_topup_to_trip({}))
         assert result["status"] == "not_found"
         assert result["available_labels"] == ["A", "B"]
+
+
+class TestCreateTripEnsuresBudgetRow:
+    def test_budgets_row_ensured_after_insert(self):
+        from tools import travel_mode
+        db = MagicMock()
+        db.read_travel_mode_records.return_value = []
+        with patch.object(travel_mode, "supabase_client", db), \
+             patch.object(travel_mode, "read_travel_mode_rows", return_value=[]):
+            r = travel_mode.create_trip(label="JP Aug", start_date="2026-08-20",
+                                        end_date="2026-08-25",
+                                        trip_category="Travel - JP 2026-08",
+                                        total_budget=1500)
+        assert r["status"] == "created", r
+        db.ensure_category_exists.assert_called_once_with("Travel - JP 2026-08")
+
+    def test_ensure_failure_does_not_break_creation(self):
+        from tools import travel_mode
+        db = MagicMock()
+        db.ensure_category_exists.side_effect = RuntimeError("503")
+        with patch.object(travel_mode, "supabase_client", db), \
+             patch.object(travel_mode, "read_travel_mode_rows", return_value=[]):
+            r = travel_mode.create_trip(label="JP Aug", start_date="2026-08-20",
+                                        end_date="2026-08-25",
+                                        trip_category="Travel - JP 2026-08",
+                                        total_budget=1500)
+        assert r["status"] == "created", r
+

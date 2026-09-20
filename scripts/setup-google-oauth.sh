@@ -12,7 +12,10 @@ if command -v gcloud &>/dev/null; then
     echo "gcloud CLI detected. Using automated setup."
     echo ""
 
-    PROJECT_ID="hermes-expense-tracker"
+    # Project ids are globally unique across all of Google Cloud, so a fixed
+    # name fails for everyone but the first person. Pass GCP_PROJECT_ID, or
+    # accept a generated one.
+    PROJECT_ID="${GCP_PROJECT_ID:-kevin-agent-$(date +%s)}"
 
     echo "Step 1: Creating project '$PROJECT_ID'..."
     gcloud projects create "$PROJECT_ID" --name="Hermes Expense Tracker" 2>/dev/null || \

@@ -1,13 +1,12 @@
 -- ============================================================================
 -- 0001_init.sql — Supabase schema for the Kevin expense tracker
 --
--- The core schema: twelve tables, the txn-id minting function, and
--- row-level security. Run once in the Supabase SQL Editor — or paste
--- supabase/schema.sql instead, which is this file plus every later
--- migration in one go. Idempotent-ish: uses IF NOT EXISTS where Postgres
--- allows it, so it is safe to re-run.
+-- Mirrors the 11-tab Google Sheet schema (supabase/migrations/0001_init.sql, v6)
+-- plus the Time column added 2026-07-27 for the idempotency time-component
+-- fix. Run once in the Supabase SQL Editor. Idempotent-ish: uses IF NOT
+-- EXISTS where Postgres allows it; safe to re-run on a fresh project.
 --
--- Design notes:
+-- Design notes (docs in repo memory / PR body):
 --   * transactions.idempotency_key UNIQUE → dedup becomes ATOMIC at insert
 --     (ON CONFLICT DO NOTHING), killing the read-then-write race the Sheet
 --     path has. NULLs never collide, so legacy rows without keys are fine.
@@ -170,7 +169,7 @@ create table if not exists trip_nudge_log (
 );
 
 -- --- row-level security -----------------------------------------------------
--- One reader: Hadi, authenticated via Supabase Auth magic link in the PWA.
+-- One reader: the owner, authenticated via Supabase Auth magic link in the PWA.
 -- The agent's service key bypasses RLS entirely. No write policies exist:
 -- anon/authenticated clients cannot mutate anything.
 

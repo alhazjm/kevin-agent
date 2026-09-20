@@ -3,10 +3,9 @@
 This module implements the SAME public function surface, signatures, and
 return shapes as `tools/sheets_client.py`, backed by the Supabase Postgres
 schema in `supabase/migrations/0001_init.sql` instead of the Google Sheet.
-It is imported directly by `tools/expense_sheets_tool.py`. The mirrored
-surface is deliberate: it was the migration seam, and keeping the shapes
-identical is what lets handlers, skills, return-shape contracts and the
-silence contract stay backend-agnostic.
+The flip (migration PR 3) swaps the backend by aliasing the import in
+`tools/expense_sheets_tool.py`; nothing downstream — handlers, skills,
+return-shape contracts, silence contract — changes.
 
 Contract rules this module lives by:
 
@@ -186,7 +185,8 @@ def _fetch_transactions(params: dict) -> list[dict]:
 def append_transaction(date: str, merchant: str, amount: float, currency: str,
                        category: str, source: str = "email",
                        payment_method: str = "", notes: str = "",
-                       txn_time: str = "", create_category: bool = False):
+                       txn_time: str = "", create_category: bool = False,
+                       idempotency_key: str = ""):
     """Insert a transaction. Mirrors `sheets_client.append_transaction`
     including the duplicate contract, with one improvement invisible to
     callers: dedup is enforced by the UNIQUE(idempotency_key) index inside
@@ -196,6 +196,15 @@ def append_transaction(date: str, merchant: str, amount: float, currency: str,
     two real same-day same-amount purchases carry different times and both
     log; a re-fired webhook carries the same time and dedupes. Empty time
     (manual/backfill) falls back to the legacy 4-field key format.
+
+    `idempotency_key`, when it looks like a real key (16 lowercase hex),
+    is used AS GIVEN instead of recomputing — the Apps Script computes it
+    at parse time and ships it in the webhook payload, so the dedup key
+    no longer depends on the LLM re-assembling identical arguments across
+    retries (2026-08-02: one Gojek ride logged twice because two attempts
+    carried txn_time 15:21 vs 15:22). Anything else — empty, a literal
+    "{idempotency_key}" template placeholder from a stale Code.gs, an
+    invented value — is ignored and the key is computed as before.
 
     The category must resolve to an existing Budget category (see
     `resolve_category`); unknown names return `status="unknown_category"`
@@ -213,8 +222,12 @@ def append_transaction(date: str, merchant: str, amount: float, currency: str,
     else:
         return _unknown_category_result(category, resolved)
 
-    idem_key = _compute_idempotency_key(date, merchant, amount, payment_method,
-                                        txn_time or "")
+    provided_key = str(idempotency_key or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{16}", provided_key):
+        idem_key = provided_key
+    else:
+        idem_key = _compute_idempotency_key(date, merchant, amount,
+                                            payment_method, txn_time or "")
     _, txn_id = _request("POST", "rpc/next_txn_id", body={"d": date})
 
     record = {
@@ -264,6 +277,53 @@ def append_transaction(date: str, merchant: str, amount: float, currency: str,
         result["new_category_created"] = True
         result["new_category"] = category
     return result
+
+
+def _time_to_minutes(t: str) -> int | None:
+    """'15:21' or '15:21:07' → minutes since midnight; None if unparseable."""
+    m = re.match(r"^(\d{1,2}):(\d{2})", str(t or "").strip())
+    if not m:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def find_near_duplicate(date: str, merchant: str, amount: float,
+                        payment_method: str, txn_time: str = "",
+                        exclude_txn_id: str = "",
+                        window_minutes: int = 3) -> dict | None:
+    """Another ledger row that looks like the same real-world charge:
+    same date, merchant and payment method (case-insensitive), same
+    amount, txn_time within `window_minutes`. Banks double-alert a single
+    purchase with drifted timestamps (2026-08-02: one Gojek ride alerted
+    at 15:21 and 15:22 — time-in-key CORRECTLY treats those as distinct
+    purchases, so hard dedup cannot catch them). This is the advisory
+    net: log_expense flags the pair in the bubble; the human decides.
+    A missing time on either side also flags — cheap false positives
+    beat silent double-counting on an advisory. Returns the raw DB row
+    or None; NEVER raises (a lookup failure must not break logging)."""
+    try:
+        rows = _fetch_transactions({"date": f"eq.{date}"})
+        want_merchant = str(merchant or "").strip().lower()
+        want_pm = str(payment_method or "").strip().lower()
+        want_amt = round(float(amount or 0), 2)
+        mine = _time_to_minutes(txn_time)
+        for r in rows:
+            if str(r.get("txn_id", "")) == str(exclude_txn_id):
+                continue
+            if str(r.get("merchant", "")).strip().lower() != want_merchant:
+                continue
+            if str(r.get("payment_method", "")).strip().lower() != want_pm:
+                continue
+            if round(float(r.get("amount", 0) or 0), 2) != want_amt:
+                continue
+            theirs = _time_to_minutes(r.get("txn_time", ""))
+            if mine is None or theirs is None:
+                return r
+            if abs(mine - theirs) <= window_minutes:
+                return r
+        return None
+    except Exception:
+        return None
 
 
 def read_all_transaction_rows() -> list[dict]:
@@ -596,7 +656,43 @@ def _trip_category_map() -> dict[str, str]:
         return {}
 
 
+def read_category_kinds() -> dict[str, str]:
+    """{normalized category → 'fixed'|'variable'} from category_meta
+    (migration 0008). Guarded read: an absent table or a transient
+    failure returns {} and every category reads as `variable` — the
+    exact pre-0008 behavior. Keys are normalized like resolve_category
+    so 'iCloud' and 'ICLOUD' agree."""
+    try:
+        _, rows = _request("GET", "category_meta",
+                           params={"select": "category,kind"})
+        return {
+            _normalize_category(str(r.get("category", ""))): str(r.get("kind", "")).strip().lower()
+            for r in rows or []
+            if str(r.get("category", "")).strip()
+        }
+    except Exception:
+        return {}
+
+
+# Fixed bills are only interesting when they come in OVER budget by more
+# than this — a price increase (Spotify 11.98→12.98) or a double charge —
+# never when they sit at their expected 100%. Sub-50c drift is rounding.
+_FIXED_OVER_TOLERANCE = 0.50
+
+
 def get_spending_summary(month: str | None = None) -> dict:
+    """Per-category month-to-date position, plus a precomputed
+    `_attention` block so the review prompts render instead of deciding.
+
+    `kind` ('fixed'|'variable', from category_meta — see 0008): fixed
+    monthly bills (subscriptions, insurance, utilities) sit at ~100% by
+    design and are EXCLUDED from over-80% warnings; they surface only in
+    `fixed_over` when spent exceeds the limit by more than $1 (the owner,
+    2026-08-17: "I don't need to know my insurance budget is filled —
+    that's something I will spend on every month"). Trip categories from
+    travel_mode are excluded from `variable_over` too — a trip's budgets
+    row is the planned envelope, and the trip flow has its own nudges.
+    """
     if not month:
         month = datetime.now().strftime("%Y-%m")
 
@@ -604,6 +700,8 @@ def get_spending_summary(month: str | None = None) -> dict:
     transactions = read_transactions(month)
     budgets = {b["Category"]: b["Monthly Limit"] for b in read_budgets(month_num)}
     trips = _trip_category_map()
+    kinds = read_category_kinds()
+    trip_cats = {c.strip().lower() for c in trips.values()}
 
     spending = {}
     pending_count = 0
@@ -617,6 +715,9 @@ def get_spending_summary(month: str | None = None) -> dict:
         amt = float(t.get("Amount", 0))
         spending[cat] = spending.get(cat, 0) + amt
 
+    def _kind(cat: str) -> str:
+        return "fixed" if kinds.get(_normalize_category(cat)) == "fixed" else "variable"
+
     summary = {}
     for cat, limit in budgets.items():
         spent = spending.get(cat, 0)
@@ -625,6 +726,7 @@ def get_spending_summary(month: str | None = None) -> dict:
             "spent": round(spent, 2),
             "remaining": round(limit - spent, 2),
             "percent_used": round((spent / limit) * 100, 1) if limit > 0 else 0,
+            "kind": _kind(cat),
         }
 
     unbudgeted = set(spending.keys()) - set(budgets.keys())
@@ -634,8 +736,48 @@ def get_spending_summary(month: str | None = None) -> dict:
             "spent": round(spending[cat], 2),
             "remaining": 0,
             "percent_used": 100,
+            "kind": _kind(cat),
             "note": "No budget set for this category",
         }
+
+    # Deterministic attention lists — the prompts print these; they do
+    # not re-derive them from the per-category rows.
+    variable_over, fixed_over = [], []
+    for cat, row in summary.items():
+        if cat.startswith("_"):
+            continue
+        limit, spent = float(row["limit"]), float(row["spent"])
+        if cat.strip().lower() in trip_cats:
+            continue
+        if row["kind"] == "fixed":
+            if limit > 0 and spent - limit > _FIXED_OVER_TOLERANCE:
+                fixed_over.append({"category": cat, "spent": row["spent"],
+                                   "limit": limit,
+                                   "over_by": round(spent - limit, 2)})
+        elif limit > 0 and row["percent_used"] >= 80:
+            variable_over.append({"category": cat, "spent": row["spent"],
+                                  "limit": limit,
+                                  "percent_used": row["percent_used"]})
+    variable_over.sort(key=lambda r: -r["percent_used"])
+    fixed_over.sort(key=lambda r: -r["over_by"])
+
+    def _light(p: float) -> str:
+        return "🔴" if p >= 100 else "🟡"
+
+    lines = [
+        f"{_light(r['percent_used'])} {r['category']}: ${r['spent']:,.0f} / "
+        f"${r['limit']:,.0f} ({r['percent_used']:.0f}%)"
+        for r in variable_over
+    ] + [
+        f"🧾 {r['category']} came in ${r['over_by']:,.2f} over its usual "
+        f"${r['limit']:,.2f} — price change or double charge?"
+        for r in fixed_over
+    ]
+    summary["_attention"] = {
+        "variable_over_80": variable_over,
+        "fixed_over": fixed_over,
+        "lines": lines,
+    }
 
     if pending_count:
         summary["_pending_review"] = {
@@ -1395,12 +1537,11 @@ def add_merchant_mapping(merchant_pattern: str, category: str) -> dict:
 
 
 def sweep_missed_transactions(days_back: int = 7) -> dict:
-    """Diff webhook_log against transactions by idempotency_key.
-
-    The Apps Script writes an audit row to `webhook_log` BEFORE it fires
-    the webhook, precisely so this diff can find anything the webhook or
-    the model dropped afterwards — emails are marked read with no retry.
-    A count of zero is the healthy answer and the caller stays silent."""
+    """Diff webhook_log against transactions by idempotency_key — same
+    contract as the Sheet version. Until migration PR 4 repoints the Apps
+    Script audit write, the webhook_log table only holds backfilled rows;
+    the Sheet's WebhookLog tab stays authoritative for the sweep until
+    then (the flip PR keeps the sweep on sheets_client until PR 4 lands)."""
     _, log_rows = _request("GET", "webhook_log", params={"order": "id.asc"})
     log_rows = log_rows or []
 

@@ -74,7 +74,7 @@ def read_cards() -> list[dict]:
             "payment_method_pattern": str(r.get("payment_method_pattern", "")).strip(),
             "cycle_start_day": max(1, min(31, cycle_day)),
             "min_spend_bonus": _as_float(r.get("min_spend_bonus")),
-            # bonus_cap was added to the live table by hand around PR #40
+            # bonus_cap was added to the live table by hand before migration 0003
             # (0003 migration makes it reproducible) — calendar-month bonus
             # spend cap in S$; 0 = none/uncapped
             "bonus_cap": _as_float(r.get("bonus_cap")),
@@ -126,7 +126,7 @@ def _check_setup() -> dict | None:
         missing.append("the `card_strategy` table is empty")
     elif not any(s["category"] == DEFAULT_STRATEGY_KEY for s in strategies):
         missing.append(
-            f"`card_strategy` needs a sentinel row with category=`{DEFAULT_STRATEGY_KEY}`"
+            f"`CardStrategy` needs a sentinel row with category=`{DEFAULT_STRATEGY_KEY}`"
         )
     if missing:
         return _setup_error(
@@ -1061,12 +1061,12 @@ def set_category_primary(category: str, card_id: str,
 
 
 # --- min-spend + steering nudge hooks (strategy layer, 2026-07-28) ----------
-# Merchant patterns hand-curated from the issuers' published bonus-category
-# T&Cs (verified 2026-07-28; re-check when the quarterly re-verification
-# runs — see .claude/skills/card-tnc-review). Substring match against the
-# uppercased merchant string. These are one deployment's Singapore cards;
-# replace them wholesale with your own issuers' bonus lists.
+# Merchant patterns hand-curated from your issuer's published T&Cs
+# (T&Cs verified 2026-07-28; re-check when the quarterly re-verification
+# runs). Substring match against the uppercased merchant string.
 
+# Replace wholesale with your own issuers' lists — these are one deployment's
+# Singapore cards (matched against the uppercased merchant string).
 _YUU_PARTNER_PATTERNS = (
     "GOJEK", "GOPAY", "FOODPANDA", "FP*FOOD", "GUARDIAN", "7-ELEVEN",
     "COLD STORAGE", "CS FRESH", "JASONS", "GIANT", "BUS/MRT", "SIMPLYGO",
@@ -1088,6 +1088,7 @@ _STEER_BIG_ONEOFF_FLOOR = 500.0
 # Earn rates for pattern-steered cards, mirroring the steer-nudge copy
 # ("4 mpd", yuu partner up to 18% ≈ 10 mpd when the month qualifies).
 # Kept next to the pattern tuples so the two stay in sync.
+# Replace wholesale with your own issuers' lists (see docs/SETUP.md, 1.4).
 _PATTERN_STEER_RATES = {"dbs-yuu": 10.0, "uob-pref": 4.0, "hsbc-revo": 4.0}
 
 
@@ -1136,7 +1137,7 @@ def maybe_send_min_spend_nudge(payment_method: str, amount: float,
                                txn_date: str) -> dict:
     """Min-spend tracker nudge, calendar-month based.
 
-    Anti-spam contract (agreed with Hadi 2026-07-28): at most (a) ONE
+    Anti-spam contract (design contract, 2026-07-28): at most (a) ONE
     "minimum met ✓" per card per calendar month, fired by the transaction
     that crosses the line, and (b) ONE at-risk warning per card per month,
     only when ≤5 days remain and the card is still short. Deduped through
@@ -1240,7 +1241,7 @@ def maybe_send_steer_nudge(merchant: str, payment_method: str,
     at most once per (merchant pattern, steer target) per calendar month,
     deduped via card_nudge_log sentinel `_steer:<pattern>` (threshold 0).
 
-    Hadi explicitly wants steering-back, not point-of-sale advice ("very
+    the design goal is steering-back, not point-of-sale advice ("very
     unlikely I will ask 'which card' before paying"). Rules, in priority
     order: yuu partner not on yuu → yuu; non-partner in-person spend ON
     yuu (the 0.25% trap) → Preferred tap; online-whitelist merchant not on
@@ -1392,15 +1393,13 @@ def get_bonus_pool_status(month: str | None = None) -> dict:
     """Calendar-month bonus-pool tracker for cards carrying a `bonus_cap`.
 
     UOB Preferred's 4 mpd runs as TWO separate S$600 calendar-month pools
-    (mobile contactless / whitelist online — split 2025-10-01, per the
-    card's published T&Cs). Bank alerts never reveal the payment channel,
-    so pool attribution is by merchant class: online-whitelist merchants
-    (_ONLINE_4MPD_PATTERNS) → online pool, everything else → contactless
-    — under this deployment's standing assumptions (every in-person
-    charge is mobile contactless; online charges are non-recurring). Any
-    other card with a bonus_cap (hsbc-revo, S$1,000) reports a single
-    pool. Both the split and the assumptions are card-specific: check
-    yours before trusting the attribution.
+    (mobile contactless / whitelist online — split 2025-10-01; see
+    your issuer's published T&Cs). Bank alerts never reveal the payment
+    channel, so pool attribution is by merchant class: online-whitelist
+    merchants (_ONLINE_4MPD_PATTERNS) → online pool, everything else →
+    contactless — under this deployment's standing assumptions (every in-person
+    charge is Apple Pay; online charges are non-recurring). Any other
+    card with a bonus_cap (hsbc-revo, S$1,000) reports a single pool.
     Cards without a bonus_cap are omitted entirely.
 
     Caps run on calendar months by POSTING date at the banks; we only
@@ -1424,10 +1423,14 @@ def get_bonus_pool_status(month: str | None = None) -> dict:
         ]
 
         out_cards = []
+        lines = []
         for card in cards:
             cap = _as_float(card.get("bonus_cap"))
+            min_spend = _as_float(card.get("min_spend_bonus"))
             pattern = str(card.get("payment_method_pattern", "")).lower().strip()
-            if cap <= 0 or not pattern:
+            if not pattern or (cap <= 0 and min_spend <= 0):
+                # Nothing to track for this card (Vantage, UOB One): the
+                # Aug-14 summary printed "$0 / $0 (0%)" for these — noise.
                 continue
             online = 0.0
             in_person = 0.0
@@ -1440,24 +1443,56 @@ def get_bonus_pool_status(month: str | None = None) -> dict:
                     online += amt
                 else:
                     in_person += amt
-            if card["card_id"] == "uob-pref":
+            total = round(online + in_person, 2)
+            pools = []
+            if cap > 0 and card["card_id"] == "uob-pref":
                 pools = [
                     {"pool": "contactless", "spent": round(in_person, 2),
                      "cap": cap, "status": _cap_status(in_person, cap)},
                     {"pool": "online", "spent": round(online, 2),
                      "cap": cap, "status": _cap_status(online, cap)},
                 ]
-            else:
-                total = round(online + in_person, 2)
+            elif cap > 0:
                 pools = [{"pool": "bonus", "spent": total, "cap": cap,
                           "status": _cap_status(total, cap)}]
-            out_cards.append({
+            entry = {
                 "card_id": card["card_id"],
                 "display_name": card["display_name"],
                 "pools": pools,
-            })
+            }
+            # yuu-style min-spend gate: calendar-month spend vs the
+            # threshold that unlocks the bonus rate. This is the honest
+            # per-card number for cards WITHOUT a bonus pool.
+            if min_spend > 0:
+                entry["min_spend"] = {
+                    "spent": total, "threshold": min_spend,
+                    "met": total >= min_spend,
+                    "short_by": round(max(0.0, min_spend - total), 2),
+                }
+            out_cards.append(entry)
 
-        return {"status": "ok", "month": month, "cards": out_cards}
+            # Verbatim line for the Friday summary — the LLM had been
+            # SUMMING per-category caps into fictitious card totals
+            # ("$312 / $2,469", "$0 / $4,800"); one pool = one number.
+            name = card["display_name"]
+            if pools and card["card_id"] == "uob-pref":
+                lines.append(
+                    f"💳 {name}: tap ${pools[0]['spent']:,.0f} / ${cap:,.0f} "
+                    f"({_percent(pools[0]['spent'], cap):.0f}%) · online "
+                    f"${pools[1]['spent']:,.0f} / ${cap:,.0f} "
+                    f"({_percent(pools[1]['spent'], cap):.0f}%)")
+            elif pools:
+                lines.append(
+                    f"💳 {name}: ${total:,.0f} / ${cap:,.0f} bonus pool "
+                    f"({_percent(total, cap):.0f}%)")
+            if min_spend > 0:
+                ms = entry["min_spend"]
+                lines.append(
+                    f"💳 {name}: ${total:,.0f} / ${min_spend:,.0f} min spend "
+                    + ("✓ met" if ms["met"] else f"— ${ms['short_by']:,.0f} to go"))
+
+        return {"status": "ok", "month": month, "cards": out_cards,
+                "lines": lines}
     except Exception as exc:
         return {"status": "error",
                 "message": f"get_bonus_pool_status failed: {exc}"}

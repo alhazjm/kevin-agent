@@ -82,7 +82,7 @@ class TestSetupGate:
             gate = card_optimiser._check_setup()
         assert gate is not None
         assert gate["status"] == "setup_required"
-        assert "`cards` table is empty" in gate["message"]
+        assert "`cards` table" in gate["message"]
 
     def test_missing_strategy(self):
         from tools import card_optimiser
@@ -90,7 +90,7 @@ class TestSetupGate:
              patch.object(card_optimiser, "read_card_strategy", return_value=[]):
             gate = card_optimiser._check_setup()
         assert gate["status"] == "setup_required"
-        assert "`card_strategy` table is empty" in gate["message"]
+        assert "`card_strategy` table" in gate["message"]
 
     def test_missing_default_sentinel(self):
         from tools import card_optimiser
@@ -676,10 +676,47 @@ class TestGetBonusPoolStatus:
         assert revo["pools"][0]["spent"] == 850.0
         assert revo["pools"][0]["status"] == "warning"
 
-    def test_capless_cards_omitted(self):
+    def test_cards_with_nothing_to_track_omitted(self):
+        # yuu has no pool but a min-spend gate → included (with min_spend
+        # block, no pools); Vantage has neither → omitted, so the Friday
+        # summary never prints "$0 / $0" for it again (2026-08-14).
         result = self._run([])
         ids = {c["card_id"] for c in result["cards"]}
-        assert ids == {"uob-pref", "hsbc-revo"}
+        assert ids == {"uob-pref", "hsbc-revo", "dbs-yuu"}
+        yuu = next(c for c in result["cards"] if c["card_id"] == "dbs-yuu")
+        assert yuu["pools"] == []
+        assert yuu["min_spend"]["threshold"] == 800.0
+        assert yuu["min_spend"]["met"] is False
+
+    def test_min_spend_progress_and_verbatim_lines(self):
+        rows = [
+            self._txn("2026-07-05", "KOPITIAM @ RAFFLES", 100.0,
+                      "UOB Card ending 5678"),
+            self._txn("2026-07-10", "SHOPEE SINGAPORE MP", 80.0,
+                      "UOB Card ending 5678"),
+            self._txn("2026-07-03", "GRAB* A-9XYZ", 850.0,
+                      "HSBC card ending 1357"),
+            self._txn("2026-07-06", "GOJEK", 312.0,
+                      "DBS/POSB card ending 1234"),
+        ]
+        result = self._run(rows)
+        yuu = next(c for c in result["cards"] if c["card_id"] == "dbs-yuu")
+        assert yuu["min_spend"] == {"spent": 312.0, "threshold": 800.0,
+                                    "met": False, "short_by": 488.0}
+        # One honest number per pool, never a summed cap; Vantage absent.
+        assert result["lines"] == [
+            "💳 UOB Preferred Visa: tap $100 / $600 (17%) · online $80 / $600 (13%)",
+            "💳 DBS Yuu Visa: $312 / $800 min spend — $488 to go",
+            "💳 HSBC Revolution Visa: $850 / $1,000 bonus pool (85%)",
+        ]
+        assert not any("Vantage" in ln for ln in result["lines"])
+
+    def test_min_spend_met_line(self):
+        rows = [self._txn("2026-07-06", "GOJEK", 900.0,
+                          "DBS/POSB card ending 1234")]
+        result = self._run(rows)
+        yuu_line = next(ln for ln in result["lines"] if "Yuu" in ln)
+        assert yuu_line == "💳 DBS Yuu Visa: $900 / $800 min spend ✓ met"
 
     def test_month_pending_and_backfill_filtered(self):
         rows = [

@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Telegram gateway then sends with send_voice — a real voice bubble with a
 # waveform, instead of an mp3 file attachment. The conversion is a short
 # ffmpeg subprocess per spoken reply (transient RAM; fine post-whisper-
-# eviction, PR #63 — don't ship this while local whisper is still in RAM).
+# eviction — don't ship this while local whisper is still in RAM).
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -34,30 +34,71 @@ WORKDIR /app
 
 # Pinned hermes-agent commit. Bump this value to pull upstream updates.
 # Changing the ARG invalidates the clone layer so Docker re-fetches.
-# Before bumping, verify that upstream toolsets.py still contains the string
-# '"send_message",' — the sed below depends on it.
-ARG HERMES_AGENT_SHA=73d0b083510367adec42746e90c41ace16c0afb2
-RUN git clone https://github.com/alhazjm/hermes-agent.git /app/hermes-agent \
+# Before bumping, work the "hermes-agent SHA bump" checklist in AGENTS.md and
+# re-verify BOTH patch anchors in deploy/patches/ at the candidate SHA.
+#
+# The old '"send_message",' toolsets.py anchor is GONE as of upstream v0.16.0:
+# the agent-callable send_message tool and the whole `messaging` toolset were
+# removed ("outbound platform messaging is handled outside the agent loop").
+# Our 37 expense tools now reach the model ONLY via registry registration plus
+# the `expense_tracker` entry in every platform_toolsets list in
+# hermes-config/cli-config.yaml. There is no sed injection any more — and note
+# that a sed with a non-matching address exits 0, so the old line had been
+# failing SILENTLY, not loudly.
+#
+# Fetched from NousResearch/hermes-agent, the real upstream. If you keep
+# your own fork, point the URL at it and keep the SHA pin.
+#
+# Currently pinned: v0.21.0 (tag v2026.8.31, 2026-08-31). History: 73d0b083
+# (v0.10.0, 2026-04-19) -> 5fc308a7 (v0.20.6) on 2026-09-01 -> 29112bef
+# (v0.21.0) on 2026-09-04. See docs/HERMES-0.20-MIGRATION-NOTES.md for the
+# full delta and what each surviving patch had to change; the 0.21.0 step
+# moved nothing we anchor on (both patch contexts byte-identical).
+ARG HERMES_AGENT_SHA=29112bef099274229cadff79cdff7bf7b99c4b77
+# Fetch ONLY the pinned commit, not the repository's history. A full clone
+# pulls every one of upstream's ~24k commits (multi-GB, with binaries under
+# apps/ native/ website/) from a Render build IP that is shared with other
+# customers, and on 2026-09-04 GitHub answered that with HTTP 429 ("RPC
+# failed; expected 'packfile'") and the deploy died at this step. A depth-1
+# fetch of the SHA is ~70MB, is what actions/checkout does, and GitHub
+# serves it for any commit reachable from a tag or branch. The .git dir is
+# kept: hermes only checks that it EXISTS (install-type detection in
+# hermes_cli/config.py) and never runs a git command; the package version is
+# static in pyproject.toml. Three attempts with backoff so a transient 429
+# does not cost a whole build; the final rev-parse makes a moved tag or a
+# wrong SHA fail loud instead of shipping the wrong tree.
+RUN git init -q /app/hermes-agent \
     && cd /app/hermes-agent \
-    && git checkout ${HERMES_AGENT_SHA}
+    && git remote add origin https://github.com/NousResearch/hermes-agent.git \
+    && for i in 1 2 3; do \
+         git fetch --depth 1 origin "${HERMES_AGENT_SHA}" && break; \
+         echo "fetch attempt $i failed; retrying in $((i*20))s"; sleep $((i*20)); \
+       done \
+    && git checkout -q FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "${HERMES_AGENT_SHA}"
 
 WORKDIR /app/hermes-agent
+
+# Extras: [all] stopped carrying opt-in backends on 2026-05-12 and is now only
+# {cron,pty,mcp,homeassistant,sms,acp,google,web,youtube}. python-telegram-bot
+# lives solely in [messaging] and edge-tts solely in [edge-tts]. Both must be
+# named explicitly or tools/lazy_deps.py pip-installs python-telegram-bot at
+# first use — a runtime network install inside a 512MB container, repeated on
+# every cold start including the nightly 04:00 Render restart.
 RUN uv venv venv --python 3.11 && \
     . venv/bin/activate && \
-    uv pip install -e ".[all]" && \
+    uv pip install -e ".[all,messaging,edge-tts]" && \
     uv pip install gspread google-auth
 
-# Evict local faster-whisper so voice-note STT falls through to the OpenAI
-# whisper-1 API instead of in-container CPU inference. The [all] extra
-# installs faster-whisper and hermes' STT auto-detect prefers local — but
-# loading the ~150MB "base" model into this 512MB instance is what tipped
-# the 2026-07-30 12:01 OOM (clean 04:56 restart + morning webhooks + one
-# voice note at 10:34 + the 12:00 cron). Post-removal detect order:
-# local whisper CLI (absent) → Groq (no key) → OpenAI (OPENAI_API_KEY is
-# set) — ~$0.006/audio-minute, and faster than base-model inference on
-# 0.5 CPU anyway. If a future SHA bump drops faster-whisper from [all],
-# this uninstall fails loud — re-evaluate then, don't blind-delete it.
-RUN . venv/bin/activate && uv pip uninstall faster-whisper
+# faster-whisper is deliberately NOT installed. Loading its ~150MB "base"
+# model into this 512MB instance is what tipped the 2026-07-30 12:01 OOM
+# (clean 04:56 restart + morning webhooks + one voice note at 10:34 + the
+# 12:00 cron), so it was evicted. Since upstream's 2026-05-12 repackaging
+# it lives only in the [voice] extra, which we do not install — so the old
+# `uv pip uninstall faster-whisper` line was removed here: uv exits 0 with a
+# warning when the package is absent, so it could never have "failed loud"
+# the way its comment promised. STT is the OpenAI API, pinned explicitly in
+# cli-config.yaml (stt.provider: openai) rather than left to auto-detect.
 
 # Pin the OpenAI STT model past the fork's aging whisper-1 default:
 # whisper-1 has dropped off OpenAI's models page (deprecation path), and
@@ -75,43 +116,74 @@ COPY tools/travel_mode.py /app/hermes-agent/tools/travel_mode.py
 COPY tools/supabase_client.py /app/hermes-agent/tools/supabase_client.py
 COPY tools/loans.py /app/hermes-agent/tools/loans.py
 
-# Register custom tools in hermes-agent source
+# Registration is automatic at this SHA — tools/registry.py's
+# discover_builtin_tools() (called from model_tools.py) AST-scans tools/*.py
+# for a top-level registry.register() and imports the matches. This explicit
+# import is KEPT as a fail-loud canary: discovery swallows an ImportError as a
+# logger.warning, so without it a broken expense_sheets_tool would ship with
+# ZERO tools registered and no build signal. Re-importing is a sys.modules
+# no-op and re-registering the same name+toolset is an idempotent overwrite.
 RUN printf '\nimport tools.expense_sheets_tool\n' >> /app/hermes-agent/model_tools.py
 
-# Inject expense_tracker tools into hermes-telegram toolset so the gateway
-# always includes them — no config-level platform_toolsets needed.
-RUN sed -i '/"send_message",/a\    # Expense tracker (custom)\n    "log_expense", "log_expense_pending", "update_budget", "get_remaining_budget", "edit_expense", "delete_expense", "link_telegram_message", "get_transaction_by_message_id", "lookup_merchant_category", "learn_merchant_mapping", "detect_subscription_creep", "undo_last_expense", "generate_spending_report", "write_insight", "get_insights", "generate_daily_insight", "render_budget_chart", "append_journal_entry", "get_journal_entries", "sweep_missed_transactions", "export_sheet_backup", "archive_year_snapshot", "get_card_cap_status", "get_bonus_pool_status", "recommend_card_for", "plan_month", "review_card_efficiency", "set_category_primary", "get_active_travel_mode", "get_trip_budget_status", "set_trip_bucket", "create_trip", "link_topup_to_trip", "create_loan", "mark_loan_repaid", "list_open_loans", "sweep_loan_offsets",' /app/hermes-agent/toolsets.py
+# TWO build-time patches, applied to upstream source in-place. Each script
+# exits non-zero unless its anchor matches EXACTLY once, and each RUN then
+# greps for the patch's marker string — so an upstream refactor breaks the
+# Docker build loudly instead of silently shipping unpatched behaviour on
+# Render. Never loosen an anchor to make the build pass (AGENTS.md M3).
+#
+# Both now target agent/conversation_loop.py, not run_agent.py: upstream
+# v0.15.0 extracted the whole agent loop into the module-level function
+# run_conversation(agent, ...), so `self` no longer exists in that scope.
+#
+# Three sibling patches were RETIRED at the 0.20.6 bump because upstream
+# does the job itself — see docs/HERMES-0.20-MIGRATION-NOTES.md:
+#   suppress_retry_status_after_silent_tools  → retries are buffered now
+#   suppress_codex_incomplete_after_silent_tools → sentinel hidden gateway-side
+#                                                 (and patch v3 exits first)
+#   skip_memory_flush_for_webhook_sessions    → _flush_memories_for_session
+#                                                 no longer exists at all
 
-# Patch hermes-agent run_agent.py to exit the agent loop cleanly when a tool
-# result carries `"assistant_reply_required": false`. Our log_expense tool
-# side-channels its own Telegram confirmation bubble, and prompt-level silence
-# instructions are not a reliable runtime contract — this is the deterministic fix.
-# v2 (PR #17): replaces the v1 zero-out, which still triggered the empty-
-# response nudge/retry cascade. The patch script exits non-zero if the
-# upstream anchor shifts (loud build failure). See CLAUDE.md "hermes-agent
-# SHA bump checklist".
+# 1. Exit the agent loop when a tool result carries
+#    `"assistant_reply_required": false`. log_expense side-channels its own
+#    Telegram bubble, and prompt-level silence is not a reliable runtime
+#    contract. v3 emits the literal NO_REPLY rather than an empty string:
+#    upstream now rewrites an empty final_response into a delivered
+#    "⚠️ Processing completed but no response was generated" bubble BEFORE any
+#    silence check runs, so v2's "" would put one junk bubble in Telegram per
+#    logged expense.
 COPY deploy/patches/suppress_reply_on_silent_tools.py /app/patches/suppress_reply_on_silent_tools.py
 RUN python3 /app/patches/suppress_reply_on_silent_tools.py \
-    && grep -q "PEHD patch v2: exit agent loop when tool signalled silence" /app/hermes-agent/run_agent.py
+    && grep -q "PEHD patch v3: exit agent loop when tool signalled silence" /app/hermes-agent/agent/conversation_loop.py
 
-# Patch Hermes retry telemetry and persist per-call LLM usage on /data.
-COPY deploy/patches/suppress_retry_status_after_silent_tools.py /app/patches/suppress_retry_status_after_silent_tools.py
-COPY deploy/patches/suppress_codex_incomplete_after_silent_tools.py /app/patches/suppress_codex_incomplete_after_silent_tools.py
+# 2. Persist per-call LLM usage as JSONL on /data so cost can be attributed
+#    per platform without depending on Hermes internals or the OpenAI
+#    dashboard. Record keys are unchanged across the 0.10→0.20 bump so
+#    scripts/summarize_llm_usage.py and the before/after cost tables stay
+#    comparable.
 COPY deploy/patches/log_llm_usage.py /app/patches/log_llm_usage.py
-RUN python3 /app/patches/suppress_retry_status_after_silent_tools.py \
-    && grep -q "PEHD patch: suppress retry status after silent tool delivery" /app/hermes-agent/run_agent.py \
-    && python3 /app/patches/suppress_codex_incomplete_after_silent_tools.py \
-    && grep -q "PEHD patch: suppress Codex incomplete after silent tool delivery" /app/hermes-agent/run_agent.py \
-    && python3 /app/patches/log_llm_usage.py \
-    && grep -q "PEHD patch: persist per-call LLM usage to /data" /app/hermes-agent/run_agent.py
+RUN python3 /app/patches/log_llm_usage.py \
+    && grep -q "PEHD patch: persist per-call LLM usage to /data" /app/hermes-agent/agent/conversation_loop.py
 
-# Prune built-in skill catalogs — this bot only uses the expense-tracker skill
-# installed via COPY skills/ below. Keeps /skills output focused and avoids
-# leaking irrelevant categories (pixel-art, github, gaming, etc.) into the
-# agent's skill discovery surface.
+# Prune built-in skill catalogs — this bot only uses the skills installed via
+# COPY skills/ below. Keeps /skills output focused and avoids leaking
+# irrelevant categories (pixel-art, github, gaming, etc.) into the agent's
+# skill discovery surface, which rides in the prompt.
+#
+# This is load-bearing at runtime, not just cosmetic: the gateway calls
+# sync_skills() on EVERY start, sourcing from /app/hermes-agent/skills, so
+# without this prune all 15 upstream skill categories are re-seeded into
+# /root/.hermes/skills on every boot. The dir still exists at 0.20.6 (upstream
+# also added optional-skills/, which is NOT synced — leave it alone).
 RUN find /app/hermes-agent/skills -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
 
 COPY skills/ /root/.hermes/skills/
+# Slash-command bundles (/log, /undo, /budget, /summary). Since 0.20.x the
+# gateway REJECTS any slash-command it does not recognise ("Unknown command")
+# instead of forwarding it to the model as text, with no config switch. A
+# bundle YAML registers /<name> natively and injects the listed skill bodies
+# plus the user's text. Read from HERMES_HOME/skill-bundles/ — ephemeral, so
+# it must be COPY'd every build (M1). Found in production 2026-09-04.
+COPY hermes-config/skill-bundles/ /root/.hermes/skill-bundles/
 COPY hermes-config/cli-config.yaml /root/.hermes/config.yaml
 COPY deploy/start.sh /app/start.sh
 COPY cron/setup-cron-jobs.sh /app/cron/setup-cron-jobs.sh

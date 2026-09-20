@@ -1,7 +1,7 @@
 """
 Custom Hermes tools for personal expense tracking.
 
-Backend: Supabase is the ledger of record — every
+Backend (since migration PR 3/4): Supabase is the ledger of record — every
 read and write goes through `tools.supabase_client`. The Google Sheet is a
 read-only nightly EXPORT (the `export_sheet_backup` tool, invoked by the
 3 AM cron): human-readable grid + the free-tier backup story. Hand edits
@@ -27,8 +27,8 @@ Registers tools with the Hermes tool registry:
   - get_insights:                Read stored insights (tier-4 memory)
   - generate_daily_insight:      Deterministic daily insight writer (cron; auto:* keys)
   - render_budget_chart:         Render a budget chart and deliver to Telegram
-  - append_journal_entry:        Save user's freeform reply to the Journal tab
-  - get_journal_entries:         Read Journal tab entries (most recent first)
+  - append_journal_entry:        Save user's freeform reply to the journal table
+  - get_journal_entries:         Read journal table entries (most recent first)
   - sweep_missed_transactions:   Diff webhook_log vs transactions to find unlogged emails
   - export_sheet_backup:         Nightly rebuild of the Sheet tabs from Supabase
   - archive_year_snapshot:       Write-once Archive-<year> cold-storage tab (Jan-1 cron)
@@ -58,8 +58,8 @@ import urllib.error
 from datetime import datetime
 
 from tools.registry import registry
-from tools import sheets_client    # Sheet export/archive writer + the idempotency formula
-from tools import supabase_client  # the ledger of record
+from tools import sheets_client    # mirror target + sweep source (dual-write window)
+from tools import supabase_client  # ledger of record since migration PR 3
 
 
 TOOLSET = "expense_tracker"
@@ -84,6 +84,12 @@ def _sheets_configured() -> bool:
     return supabase_client._configured()
 
 
+_SHEET_EXPORT_SETUP_MSG = (
+    "Google Sheet backup is not configured — set GSPREAD_SPREADSHEET_ID and "
+    "GOOGLE_SERVICE_ACCOUNT_JSON to enable it. This is optional; the ledger "
+    "lives in Supabase and is unaffected."
+)
+
 def _sheet_export_configured() -> bool:
     """Extra gate for the two tools that write to the Google Sheet.
 
@@ -98,13 +104,6 @@ def _sheet_export_configured() -> bool:
     )
 
 
-_SHEET_EXPORT_SETUP_MSG = (
-    "Google Sheet backup is not configured — set GSPREAD_SPREADSHEET_ID and "
-    "GOOGLE_SERVICE_ACCOUNT_JSON to enable it. This is optional; the ledger "
-    "lives in Supabase and is unaffected."
-)
-
-
 
 # Category-keyword → emoji table for the confirmation bubble prefix. First
 # substring hit against the lowercased category wins, so put specific
@@ -116,14 +115,14 @@ _CATEGORY_EMOJI_KEYWORDS = [
     ("miso grooming",   "✂️"),
     ("miso dental",     "🦷"),
     ("miso",            "🐱"),
-    ("sam food",        "🥘"),
-    ("sam travel",      "✈️"),
-    ("sam phone",       "📱"),
-    ("sam clothes",     "👗"),
-    ("sam dental",      "🦷"),
-    ("sam hair",        "💇"),
-    ("sam self",        "📚"),
-    ("sam",             "💕"),
+    ("sam food",       "🥘"),
+    ("sam travel",     "✈️"),
+    ("sam phone",      "📱"),
+    ("sam clothes",    "👗"),
+    ("sam dental",     "🦷"),
+    ("sam hair",       "💇"),
+    ("sam self",       "📚"),
+    ("sam",            "💕"),
     ("personal - food", "🍜"),
     ("food",            "🍜"),
     ("drink",           "🍜"),
@@ -255,13 +254,19 @@ def _send_telegram_photo(photo_url: str, caption: str, chat_id: str = "") -> dic
 LOG_EXPENSE_SCHEMA = {
     "name": "log_expense",
     "description": (
-        "Log a new expense transaction to the Google Sheet. Automatically "
+        "Log a new expense transaction to the ledger (Supabase Postgres). Automatically "
         "sends a Telegram confirmation bubble and links the message_id to "
         "the transaction row (enabling reply-to-message edits). "
         "Do NOT send the confirmation yourself — the tool handles it. "
         "When this tool returns bubble_sent=true, you MUST produce an "
         "EMPTY assistant reply — the user has already seen the confirmation "
-        "via the bubble and any extra text is a duplicate message."
+        "via the bubble and any extra text is a duplicate message. "
+        "A non-SGD currency is converted to SGD IN THE TOOL (frankfurter; "
+        "an `orig:` trace is stamped into notes) — pass the foreign amount "
+        "and currency as given, never convert yourself. During an active "
+        "trip the tool routes YouTrip / FX-converted spends into the trip "
+        "category itself — you still propose the HOME category as usual "
+        "(it becomes the trip bucket)."
     ),
     "parameters": {
         "type": "object",
@@ -272,11 +277,18 @@ LOG_EXPENSE_SCHEMA = {
             },
             "amount": {
                 "type": "number",
-                "description": "Transaction amount in the given currency",
+                "description": (
+                    "Transaction amount in the given currency (the ORIGINAL "
+                    "foreign amount when currency is not SGD — the tool "
+                    "converts)."
+                ),
             },
             "currency": {
                 "type": "string",
-                "description": "Currency code (default: SGD)",
+                "description": (
+                    "ISO currency code as the user/bank gave it (default: "
+                    "SGD). Non-SGD is converted to SGD in the tool."
+                ),
                 "default": "SGD",
             },
             "category": {
@@ -287,7 +299,10 @@ LOG_EXPENSE_SCHEMA = {
                     "prefixes. Unknown names are refused with "
                     "status=unknown_category (plus `closest` suggestions) and "
                     "nothing is logged. Use your best judgment to pick an "
-                    "EXISTING category based on the merchant name."
+                    "EXISTING category based on the merchant name. During an "
+                    "active trip, propose the HOME category exactly as always "
+                    "— the tool re-routes trip spends itself and reports it "
+                    "under `trip_routed`."
                 ),
             },
             "create_category": {
@@ -331,12 +346,37 @@ LOG_EXPENSE_SCHEMA = {
             "time": {
                 "type": "string",
                 "description": (
-                    "Transaction time, 24h SGT, e.g. '19:47' or '19:47:03'. "
+                    "Transaction time, 24h local time, e.g. '19:47' or '19:47:03'. "
                     "ALWAYS pass this through when the webhook payload "
                     "carries a Time field — it disambiguates two real "
                     "purchases at the same merchant for the same amount on "
                     "the same day. Leave empty for manual logs without a "
                     "known time."
+                ),
+                "default": "",
+            },
+            "route_to_trip": {
+                "type": "boolean",
+                "default": True,
+                "description": (
+                    "Set false ONLY when the user explicitly says this "
+                    "purchase is NOT a trip cost (e.g. a home order placed "
+                    "abroad). Default true: during an active trip the tool "
+                    "routes YouTrip taps and FX-converted charges into the "
+                    "trip category itself. Fixed monthly bills are never "
+                    "routed regardless of this flag."
+                ),
+            },
+            "idempotency_key": {
+                "type": "string",
+                "description": (
+                    "The 16-hex dedup key from the webhook payload's "
+                    "'Idempotency key' line, copied EXACTLY. Never invent, "
+                    "derive, or modify one — omit this argument entirely "
+                    "for manual logs or when the payload has no key; the "
+                    "ledger computes it then. Passing the payload's key "
+                    "verbatim is what makes a retried webhook dedupe even "
+                    "when other arguments drift."
                 ),
                 "default": "",
             },
@@ -385,6 +425,84 @@ def _retry_link(txn_id: str, message_id: str, max_attempts: int = 3) -> dict:
                 }
 
 
+# Frankfurter (ECB reference rates) — the same free, keyless source the
+# Apps Script uses in `convertToSGD`, so a manual "rm33" and a DBS-in-KL
+# email stamp byte-identical `orig:` traces.
+_FX_API_BASE = "https://api.frankfurter.dev/v1"
+
+
+def _fx_to_sgd(amount: float, currency: str, date: str = "") -> dict:
+    """Convert `amount` of `currency` to SGD via frankfurter (stdlib urllib,
+    no SDK). Tries the DATED endpoint first (`/v1/{date}?base=CUR&symbols=SGD`
+    — the rate the bank would have used) and falls back to `/v1/latest`
+    when the dated call fails; up to 3 attempts per URL on network/5xx
+    errors (0.5s/1s backoff), a 4xx skips straight to the next URL.
+
+    Returns `{"ok": True, "amount": <2dp SGD>, "rate", "fx_date",
+    "note": "orig: CUR amt @ rate6dp (frankfurter YYYY-MM-DD)"}` — the note
+    mirrors Code.gs's `origNote` format exactly (the `orig:` prefix is the
+    travel-routing signal, M13) — or `{"ok": False, "error"}`. SGD/empty
+    currency is a passthrough (`rate` 1.0, empty note). Never raises."""
+    cur = (currency or "").strip().upper()
+    try:
+        amt = float(amount)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": f"non-numeric amount: {amount!r}"}
+    if not cur or cur == "SGD":
+        return {"ok": True, "amount": round(amt, 2), "rate": 1.0,
+                "fx_date": "", "note": ""}
+
+    candidates = []
+    if date:
+        candidates.append(f"{_FX_API_BASE}/{date}?base={cur}&symbols=SGD")
+    candidates.append(f"{_FX_API_BASE}/latest?base={cur}&symbols=SGD")
+
+    last_err = ""
+    for url in candidates:
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "kevin-agent/1.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                rate = (data or {}).get("rates", {}).get("SGD")
+                if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+                    raise ValueError("unexpected response shape (no rates.SGD)")
+                fx_date = str(data.get("date") or "")
+                stamp = f"frankfurter {fx_date}" if fx_date else "frankfurter"
+                return {
+                    "ok": True,
+                    "amount": round(amt * float(rate), 2),
+                    "rate": float(rate),
+                    "fx_date": fx_date,
+                    "note": f"orig: {cur} {amt:.2f} @ {float(rate):.6f} ({stamp})",
+                }
+            except urllib.error.HTTPError as exc:
+                last_err = f"HTTP {exc.code} for {cur}"
+                if exc.code < 500:
+                    break  # unknown currency / bad date — try the next URL
+            except Exception as exc:
+                last_err = str(exc) or exc.__class__.__name__
+            if attempt < 2:
+                time.sleep(0.5 * (2 ** attempt))  # 0.5s, 1s
+    return {"ok": False, "error": last_err or "fx lookup failed"}
+
+
+def _fx_failed_result(currency: str, amount: float, error: str) -> str:
+    """The shared fx_failed refusal (log_expense + log_expense_pending):
+    nothing written, no bubble — the model asks the user for the SGD
+    amount and logs that instead."""
+    return json.dumps({
+        "status": "error",
+        "reason": "fx_failed",
+        "message": (
+            f"Couldn't convert {(currency or '').strip().upper()} "
+            f"{amount:.2f} to SGD ({error}) — nothing logged. Ask the user "
+            "for the SGD amount and log that instead."
+        ),
+    })
+
+
 def handle_log_expense(args: dict, **kwargs) -> str:
     merchant = args.get("merchant", "")
     amount = float(args.get("amount", 0))
@@ -396,14 +514,67 @@ def handle_log_expense(args: dict, **kwargs) -> str:
     source = args.get("source", "manual")
     txn_time = args.get("time", "")
     create_category = bool(args.get("create_category", False))
+    idempotency_key = str(args.get("idempotency_key", "") or "")
+
+    # Step 0a: FX normalisation IN THE TOOL (2026-08-17). A manual foreign
+    # amount ("rm33") is converted to SGD here — the model no longer
+    # converts — and the `orig:` trace is stamped into notes exactly like
+    # Code.gs does for bank emails, so downstream (travel routing, PWA,
+    # recon) sees one format. Email payloads arrive pre-converted with
+    # `orig:` already in notes and are left alone. On FX failure NOTHING
+    # is written and no bubble is sent — the model asks for the SGD amount.
+    if (currency or "").strip().upper() != "SGD" and "orig:" not in (notes or "").lower():
+        fx = _fx_to_sgd(amount, currency, date)
+        if not fx.get("ok"):
+            return _fx_failed_result(currency, amount, fx.get("error", ""))
+        amount = fx["amount"]
+        currency = "SGD"
+        notes = f"{notes}; {fx['note']}" if notes else fx["note"]
+
+    # Step 0b: deterministic trip routing (the tool decides, not the
+    # model). With a trip active for `date`, a YouTrip payment or an
+    # `orig:` FX trace sends the spend into the trip category with a
+    # `[bucket:X]` derived from the PROPOSED home category; SGD spends with
+    # no signal stay home. Lazy import (M10); the router never raises.
+    trip_routed = None
+    route_to_trip = args.get("route_to_trip", True)
+    if isinstance(route_to_trip, str):
+        route_to_trip = route_to_trip.strip().lower() not in ("false", "0", "no")
+    try:
+        from tools import travel_mode
+        routing = (
+            travel_mode.route_for_trip(
+                txn_date=date,
+                proposed_category=category,
+                payment_method=payment_method,
+                notes=notes,
+                currency=currency,
+            )
+            if route_to_trip
+            else {"applied": False, "reason": "opted_out"}
+        )
+        if routing.get("applied"):
+            trip_routed = {
+                "trip_label": routing.get("trip_label", ""),
+                "from_category": routing.get("from_category", category),
+                "to_category": routing.get("category", category),
+                "bucket": routing.get("bucket"),
+                "signal": routing.get("signal"),
+            }
+            category = routing["category"]
+            notes = routing["notes"]
+    except Exception:
+        trip_routed = None
 
     # Step 1: log the transaction to Supabase (dedup is atomic there via
     # the UNIQUE(idempotency_key) index; txn_time participates in the key
-    # so two real same-day same-amount purchases both log). The category
-    # is snapped to an existing Budget category inside append_transaction;
-    # unknown names come back as status=unknown_category with nothing
-    # written unless create_category=True (a user decision, never the
-    # LLM's).
+    # so two real same-day same-amount purchases both log). A valid
+    # payload-provided idempotency_key wins over recomputation — see
+    # append_transaction's docstring (the 2026-08-02 Gojek double-log).
+    # The category is snapped to an existing Budget category inside
+    # append_transaction; unknown names come back as
+    # status=unknown_category with nothing written unless
+    # create_category=True (a user decision, never the LLM's).
     result = supabase_client.append_transaction(
         date=date,
         merchant=merchant,
@@ -415,6 +586,7 @@ def handle_log_expense(args: dict, **kwargs) -> str:
         notes=notes,
         txn_time=txn_time,
         create_category=create_category,
+        idempotency_key=idempotency_key,
     )
 
     # Unknown category: nothing was logged, no bubble to send — return the
@@ -435,14 +607,41 @@ def handle_log_expense(args: dict, **kwargs) -> str:
     # the nudge hooks below.
     if result.get("status") == "ok" and result.get("row"):
         category = result["row"][4]
+    if trip_routed and result.get("status") == "ok":
+        result["trip_routed"] = trip_routed
 
     txn_id = result.get("txn_id", "")
+
+    # Near-duplicate advisory (the 2026-08-02 Gojek pair): banks
+    # double-alert one purchase with drifted timestamps, which time-in-key
+    # dedup CORRECTLY treats as distinct — so this is a flag, not a block.
+    # The warning rides INSIDE the bubble (silence contract — never a
+    # second message), after the "(txn_id)" line so the reply-to-edit
+    # fallback still parses the bubble's own id first. Never raises.
+    near_dup = None
+    if result.get("status") == "ok" and txn_id:
+        try:
+            near_dup = supabase_client.find_near_duplicate(
+                date=date, merchant=merchant, amount=amount,
+                payment_method=payment_method, txn_time=txn_time,
+                exclude_txn_id=txn_id,
+            )
+        except Exception:
+            near_dup = None
+        if near_dup:
+            result["possible_duplicate_of"] = str(near_dup.get("txn_id", ""))
 
     # Step 2: automatically send confirmation bubble and link message_id.
     # This is fully deterministic — no LLM cooperation required.
     if txn_id and os.environ.get("TELEGRAM_BOT_TOKEN"):
         bubble = _format_bubble(merchant, amount, currency, category,
                                 payment_method, txn_id)
+        if near_dup:
+            bubble += (
+                f"\n⚠️ looks like {near_dup.get('txn_id', '?')} "
+                f"minutes earlier — same amount, same card. If the bank "
+                f"double-alerted, reply: delete {txn_id}"
+            )
         send_result = _send_telegram_bubble(bubble)
         if send_result.get("ok"):
             message_id = send_result["message_id"]
@@ -582,14 +781,18 @@ LOG_EXPENSE_PENDING_SCHEMA = {
         "Log a transaction with category='UNCATEGORIZED' and send a Telegram "
         "ask-prompt asking the user which category to use. The ask-prompt "
         "includes the txn_id so the user's reply resolves back to the row. "
-        "Use this instead of log_expense when categorisation is ambiguous — "
-        "always-ask merchants (supermarkets, marketplaces, convenience), "
+        "Use this instead of log_expense when categorisation is genuinely ambiguous (NOT for supermarkets / marketplaces / convenience stores — those default to their category via log_expense and the user corrects by reply) — "
+        ""
         "PayLah!/PayNow transfers to an individual, or when your confidence "
         "is below ~90%. You provide the numbered category options as a list. "
         "When the user replies with a choice, call edit_expense(txn_id=..., "
         "new_category=<picked>) then learn_merchant_mapping. "
         "When this tool returns bubble_sent=true, you MUST produce an EMPTY "
-        "assistant reply — the user has already received the ask-prompt."
+        "assistant reply — the user has already received the ask-prompt. "
+        "A non-SGD currency is converted to SGD in the tool (never convert "
+        "yourself); during an active trip a YouTrip / FX-converted spend is "
+        "logged straight into the trip category (no ask-prompt) — offer the "
+        "HOME category options as usual."
     ),
     "parameters": {
         "type": "object",
@@ -646,7 +849,7 @@ LOG_EXPENSE_PENDING_SCHEMA = {
             "time": {
                 "type": "string",
                 "description": (
-                    "Transaction time, 24h SGT. Same contract as "
+                    "Transaction time, 24h local time. Same contract as "
                     "log_expense: pass the webhook payload's Time field "
                     "through when present."
                 ),
@@ -697,6 +900,52 @@ def handle_log_expense_pending(args: dict, **kwargs) -> str:
                 "to ask, call log_expense directly."
             ),
         })
+
+    # FX + trip routing FIRST (same rules as log_expense). During an active
+    # trip a YouTrip / FX-converted spend is a pot spend — its home
+    # category matters little, so we skip the ask-prompt and log it
+    # straight into the trip category with `[bucket:misc]` via the normal
+    # log_expense path (normal bubble). Nothing is written on FX failure.
+    if (currency or "").strip().upper() != "SGD" and "orig:" not in (notes or "").lower():
+        fx = _fx_to_sgd(amount, currency, date)
+        if not fx.get("ok"):
+            return _fx_failed_result(currency, amount, fx.get("error", ""))
+        amount = fx["amount"]
+        currency = "SGD"
+        notes = f"{notes}; {fx['note']}" if notes else fx["note"]
+
+    try:
+        from tools import travel_mode
+        routing = travel_mode.route_for_trip(
+            txn_date=date,
+            proposed_category=_PENDING_CATEGORY,
+            payment_method=payment_method,
+            notes=notes,
+            currency=currency,
+        )
+    except Exception:
+        routing = {"applied": False, "reason": "exception"}
+    if routing.get("applied"):
+        delegated = dict(args)
+        delegated.pop("options", None)
+        delegated.update({
+            "amount": amount,
+            "currency": currency,
+            "date": date,
+            "category": routing["category"],
+            "notes": routing["notes"],
+        })
+        parsed = json.loads(handle_log_expense(delegated))
+        if parsed.get("status") == "ok":
+            parsed["trip_routed"] = {
+                "trip_label": routing.get("trip_label", ""),
+                "from_category": _PENDING_CATEGORY,
+                "to_category": routing["category"],
+                "bucket": routing.get("bucket"),
+                "signal": routing.get("signal"),
+            }
+            parsed["pending_skipped"] = True
+        return json.dumps(parsed)
 
     # Ensure the placeholder category exists so reports/budget calcs don't
     # fail on a missing-row lookup. Idempotent on both backends; the Sheet
@@ -822,7 +1071,13 @@ GET_BUDGET_SCHEMA = {
     "name": "get_remaining_budget",
     "description": (
         "Get the remaining budget for one or all categories for a given month. "
-        "Shows limit, spent, remaining, and percent used."
+        "Shows limit, spent, remaining, percent used, and `kind` "
+        "('fixed' monthly bills vs 'variable'). The `_attention.lines` "
+        "entry is the precomputed warning list — variable categories at "
+        "80%+ and fixed bills that came in OVER their usual amount. When "
+        "asked to warn about budgets, print `_attention.lines` VERBATIM; "
+        "never list a fixed bill just for being at 100% (that is its "
+        "normal state) and never re-derive warnings from the rows yourself."
     ),
     "parameters": {
         "type": "object",
@@ -1042,7 +1297,7 @@ LINK_TELEGRAM_MESSAGE_SCHEMA = {
     "name": "link_telegram_message",
     "description": (
         "Attach a Telegram message_id to an already-logged transaction. "
-        "Call this immediately after sending a confirmation bubble for a freshly "
+        "Normally unnecessary — log_expense links the bubble itself. Use only to repair a row whose link failed for a freshly "
         "logged expense — pass the `txn_id` returned by `log_expense` and the "
         "`message_id` of the bubble Telegram just sent. This is what makes "
         "reply-to-message edits possible later."
@@ -1135,7 +1390,7 @@ registry.register(
 LOOKUP_MERCHANT_CATEGORY_SCHEMA = {
     "name": "lookup_merchant_category",
     "description": (
-        "Check the MerchantMap tab for a learned merchant → category mapping. "
+        "Check the merchant_map table for a learned merchant → category mapping. "
         "Call this BEFORE asking the user to disambiguate a category — if a "
         "mapping exists, use it directly instead of asking. Returns the matching "
         "mapping (with `merchant_pattern` and `category`) or null."
@@ -1175,7 +1430,7 @@ registry.register(
 LEARN_MERCHANT_MAPPING_SCHEMA = {
     "name": "learn_merchant_mapping",
     "description": (
-        "Persist a merchant → category mapping to the MerchantMap tab so future "
+        "Persist a merchant → category mapping to the merchant_map table so future "
         "transactions matching this pattern get categorised automatically. Call "
         "this after the user corrects a categorisation (e.g. moves a Shopee "
         "transaction to Miso Litter) so you don't have to ask again next time. "
@@ -1381,9 +1636,9 @@ registry.register(
 WRITE_INSIGHT_SCHEMA = {
     "name": "write_insight",
     "description": (
-        "Persist a derived insight to the Insights tab for future reference. "
+        "Persist a derived insight to the insights table for future reference. "
         "Call this after generating a spending report or summary to save key "
-        "findings (e.g. 'You overspent Dining by 22% in week 14'). Future "
+        "findings (e.g. 'Dining overspent by 22% in week 14'). Future "
         "report runs read stored insights first, so summaries build on prior "
         "conclusions instead of recomputing from scratch."
     ),
@@ -1434,7 +1689,7 @@ registry.register(
 GET_INSIGHTS_SCHEMA = {
     "name": "get_insights",
     "description": (
-        "Read stored insights from the Insights tab. Call this BEFORE "
+        "Read stored insights from the insights table. Call this BEFORE "
         "generating a new spending report to build on prior conclusions. "
         "Filter by month and/or category. Returns most recent first."
     ),
@@ -1627,7 +1882,7 @@ RENDER_BUDGET_CHART_SCHEMA = {
         "deliver it as a photo to the user's Telegram. Use when the user "
         "asks for a visual snapshot, chart, or 'show me' their spending "
         "distribution or budget vs actual. The tool sends the photo "
-        "automatically via the Bot API \u2014 do NOT call send_message after. "
+        "automatically via the Bot API \u2014 do NOT send any message yourself after. "
         "When bubble_sent=true, emit an EMPTY assistant reply."
     ),
     "parameters": {
@@ -1740,12 +1995,12 @@ registry.register(
 APPEND_JOURNAL_ENTRY_SCHEMA = {
     "name": "append_journal_entry",
     "description": (
-        "Save a freeform user reply as a journal entry in the Journal tab. "
+        "Save a freeform user reply as a journal entry in the journal table. "
         "Call this ONLY when the user replies to the '💭 Journal:' prompt "
         "of a bot summary, or explicitly says to journal/note something "
         "('journal this', 'note for the diary'). A journal entry is a "
         "diary line — narrative, feelings, context ('was stressful today', "
-        "'bought the $45 meal because Sam visiting'). NEVER call it for: "
+        "'bought the $45 meal because a friend was visiting'). NEVER call it for: "
         "questions to the agent, budget/category/edit/delete instructions, "
         "category picks after log_expense_pending, forwarded bank alerts, "
         "or any message the user expects an ACTION from — those go through "
@@ -1827,11 +2082,11 @@ registry.register(
 GET_JOURNAL_ENTRIES_SCHEMA = {
     "name": "get_journal_entries",
     "description": (
-        "Read journal entries from the Journal tab, most recent first. "
+        "Read journal entries from the journal table, most recent first. "
         "Filter by exact date (YYYY-MM-DD) or month (YYYY-MM). Use when "
         "generating summaries/reports that should reference the user's "
         "own narrative notes, or when the user asks 'what did I write on "
-        "<date>?'. Returns an empty list if the Journal tab doesn't exist "
+        "<date>?'. Returns an empty list if the journal table doesn't exist "
         "yet (pre-experiment state)."
     ),
     "parameters": {
@@ -1877,7 +2132,7 @@ registry.register(
 #
 # Recovery path for when the LLM API returns 529 / times out and the parsed
 # bank email never reaches Transactions. The Apps Script audits every parsed
-# email into the WebhookLog tab before firing the webhook, so this tool can
+# email into the webhook_log table before firing the webhook, so this tool can
 # diff WebhookLog against the ledger by idempotency_key and surface anything
 # that was dropped.
 #
@@ -1887,7 +2142,7 @@ registry.register(
 SWEEP_MISSED_TRANSACTIONS_SCHEMA = {
     "name": "sweep_missed_transactions",
     "description": (
-        "Compare the WebhookLog tab (every parsed bank email, written by "
+        "Compare the webhook_log table (every parsed bank email, written by "
         "the Apps Script before firing the webhook) against the Transactions "
         "tab to find entries that were parsed but never logged — typically "
         "because the LLM returned 529, timed out, or hit a rate limit. "
@@ -1938,11 +2193,10 @@ registry.register(
 # --- export_sheet_backup ---
 #
 # The nightly 3 AM cron calls this to rebuild the Sheet's Transactions and
-# Budget tabs from Supabase (the ledger of record). The Sheet is a
-# read-only human view + the free-tier backup copy, and is optional —
-# without the Google env vars this tool returns setup_required and the
-# cron stays silent. Grid assembly happens here (the handler knows both
-# backends' shapes); sheets_client.write_sheet_snapshot does the raw I/O.
+# Budget tabs from Supabase (the ledger of record). This replaced the
+# dual-write mirror: the Sheet is a read-only human view + the free-tier
+# backup copy. Grid assembly happens here (the handler knows both backends'
+# shapes); sheets_client.write_sheet_snapshot does the raw I/O.
 
 EXPORT_SHEET_BACKUP_SCHEMA = {
     "name": "export_sheet_backup",
@@ -2427,15 +2681,15 @@ registry.register(
 GET_ACTIVE_TRAVEL_MODE_SCHEMA = {
     "name": "get_active_travel_mode",
     "description": (
-        "Return the active TravelMode row (the trip whose date range "
-        "contains today). Use as the FIRST step when an FX-converted "
-        "(non-SGD) transaction arrives — if `active=true`, the trip's "
-        "`trip_category` becomes the Budget-tab category for the txn, and "
-        "you pick a bucket (food/transport/flight/activities/misc/...) to "
-        "stamp into Notes as `[bucket:X]` per the skill rules. Returns "
-        "`active=false` when no trip covers today's date — fall back to "
-        "the normal categorisation flow. Optional `as_of` (YYYY-MM-DD) "
-        "to query a specific date instead of today."
+        "Return the active travel_mode row (the trip whose date range "
+        "contains today). Trip ROUTING happens INSIDE log_expense / "
+        "log_expense_pending — do NOT call this before logging a spend, "
+        "and do NOT pick the trip category or a [bucket:X] tag yourself. "
+        "Use it only after a YouTrip top-up is logged (to decide which "
+        "trip to link with link_topup_to_trip) or when the user asks about "
+        "the active trip. Returns `active=false` when no trip covers the "
+        "date. Optional `as_of` (YYYY-MM-DD) to query a specific date "
+        "instead of today."
     ),
     "parameters": {
         "type": "object",

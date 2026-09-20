@@ -7,15 +7,22 @@ checklists literally, treat the named mistakes as real (each one cost
 debugging time at least once), and use the escalation rules instead of
 guessing. When this file and your instinct disagree, this file wins.
 
-> This is the single source. `CLAUDE.md` is a three-line pointer at this
+> This is the single source. `CLAUDE.md` is a short pointer at this
 > file, because Claude Code looks for that name — there is nothing to keep
 > in sync.
 
 ## What this repo is
 
-This repo is the **deployment shell** for a personal
+> **"PEHD"** — you will see it in the env var `PEHD_LLM_USAGE_DIR`, the
+> `PEHD_PATCH_TARGET` override, and the `PEHD patch …` marker strings the
+> Dockerfile greps for. It is the acronym of the private deployment this
+> repo is exported from. Those identifiers are load-bearing (the patch
+> scripts, the Dockerfile greps and the usage summariser all key on them);
+> leave them as they are.
+
+`kevin-agent` is the **deployment shell** for a personal
 expense-tracking agent built on the
-[hermes-agent](https://github.com/alhazjm/hermes-agent) framework. It runs on
+[hermes-agent](https://github.com/NousResearch/hermes-agent) framework. It runs on
 Render (Singapore, $7/mo) as a Docker container. The agent ingests
 DBS/UOB/HSBC bank emails — plus self-sent YouTrip iPhone-Shortcut alerts —
 via a Gmail Apps Script → HMAC-signed webhook, accepts manual `/log`
@@ -62,13 +69,16 @@ each surface deploys differently:
 Bank email → Gmail → Apps Script (every 5 min, two searches: bank query
 + YouTrip-Shortcut subject query):
   parse (regex; DBS / UOB / HSBC / YouTrip-Shortcut) → FX-convert non-SGD
-  via frankfurter.app (stamps "orig: …" into notes) → audit row to the
+  via frankfurter.dev (stamps "orig: …" into notes) → audit row to the
   Supabase webhook_log table (durable, BEFORE send; Sheet WebhookLog tab
   is the fallback) → HMAC-sign (X-Webhook-Signature) →
   POST /webhooks/expense-ingest
     → hermes webhook route renders the prompt in cli-config.yaml
-    → gpt-5.4-nano + expense-tracker skill picks a category
-      (multi-category list → travel mode → MerchantMap → judgment → ask;
+    → gpt-5.4-nano + expense-ingest skill (slim webhook subset of
+      expense-tracker) picks a category
+      (multi-category list → MerchantMap → judgment → ask — the HOME
+       category only; trip routing happens deterministically INSIDE
+       log_expense, see "Travel mode + trip pots";
        resolve_category snaps proposals onto the canonical budgets list
        and refuses unknowns unless the USER named them — create_category
        is opt-in, the phantom-🍜 fix)
@@ -80,7 +90,7 @@ Bank email → Gmail → Apps Script (every 5 min, two searches: bank query
 ```
 
 Manual path: user texts "/log $30 IKEA" → same skill flow with
-`source="manual"`. Cron path: 7 jobs (see `cron/setup-cron-jobs.sh`) invoke
+`source="manual"`. Cron path: 6 jobs (see `cron/setup-cron-jobs.sh`) invoke
 skills on SGT schedules and deliver to Telegram.
 
 ## Repo layout
@@ -89,23 +99,23 @@ skills on SGT schedules and deliver to Telegram.
 Dockerfile                     # Render build — see "Build & deploy reference"
 render.yaml                    # Render Blueprint for the web service (env-var list lives here)
 deploy/start.sh                # Container entrypoint; writes .env, seds placeholders, links /data, prunes sessions, runs hermes
-deploy/patches/                # FOUR build-time patches applied to hermes-agent source (see Build & deploy)
+deploy/patches/                # TWO build-time patches applied to hermes-agent source (three retired at 0.20.6; see Build & deploy)
 apps-script/                   # Gmail Apps Script (bank + Shortcut email → webhook); deployed via clasp, not the container
-cron/setup-cron-jobs.sh        # Creates the 7 hermes cron jobs (seeded once per /data disk by start.sh)
-docs/                          # SETUP.md (cloner guide) + RFC-style notes: STATEMENT-RECON.md,
-                               #   CARD-OPTIMISER-ARCHITECTURE.md, SWEEP-ARCHITECTURE.md
+cron/setup-cron-jobs.sh        # Creates the 6 hermes cron jobs (seeded once per /data disk by start.sh)
+docs/                          # SETUP.md (cloner guide), UPGRADING-HERMES.md (move the upstream pin
+                               #   yourself), HERMES-0.20-MIGRATION-NOTES.md, the two RFCs, STATEMENT-RECON.md
 hermes-config/
   cli-config.yaml              # Hermes gateway config (model, stt, webhook route, platform toolsets)
-  USER.md.example              # Tier-2 identity template (you, household, payment methods)
-  MEMORY.md.example            # Tier-2 system facts (schema, webhook shape, enums)
-  SOUL.md.example              # Tier-2 agent persona (tone, principles)
-                               #   Fill these in, drop the .example suffix — the Dockerfile COPYs the real names
-  install.sh                   # LOCAL DEV ONLY — not in the container
+  USER.md.example              # Tier-2 identity template (you, your household, payment methods) — the real USER.md is gitignored
+  MEMORY.md.example            # Tier-2 system facts template (schema, webhook shape, enums)
+  SOUL.md.example              # Tier-2 agent persona template (tone, principles)
+  skill-bundles/*.yaml         # /log /undo /budget /summary — the gateway rejects unknown slash-commands since 0.20.x; a bundle registers one (ships to /root/.hermes/skill-bundles/)
 skills/                        # RUNTIME skills (ship to /root/.hermes/skills/)
-  expense-tracker/SKILL.md     # Main skill (v5.7.0): categorisation, travel routing, trips/pots, lending, silence contract
-  budget-manager/SKILL.md      # Cron-driven budget warnings / reallocation (v3.0.0)
+  expense-tracker/SKILL.md     # Main skill (v5.10.1): categorisation, travel routing, trips/pots, lending, silence contract
+  expense-ingest/SKILL.md      # Webhook-only SUBSET of expense-tracker (v1.0.1) — the only skill the ingest route loads; mirror-locked to it
+  budget-manager/SKILL.md      # Cron-driven budget warnings / reallocation (v3.1.0)
   weekly-summary/SKILL.md      # Friday + 1st-of-month summaries (v3.1.0)
-  card-optimiser/SKILL.md      # Cap tracking, card recs, nudges, scorecard (v1.4.0)
+  card-optimiser/SKILL.md      # Cap tracking, card recs, nudges, scorecard (v1.5.0)
 .claude/skills/                # REPO-side Claude Code skills (never ship): /statement-recon,
                                #   /card-tnc-review, /new-alert-source
 tools/
@@ -115,15 +125,15 @@ tools/
   card_optimiser.py            # Card logic + post-cap nudge hook (no registration here)
   travel_mode.py               # Trip routing, [trip:]/[bucket:] writers + bucket nudge hook (no registration here)
   loans.py                     # IOU logic: create/repay/offset-sweep (no registration here)
-supabase/migrations/           # 0001..0007 numbered SQL — THE schema reference (run BY HAND in the SQL editor)
-supabase/budget_categories.json # Generic starter category list for a fresh install
-supabase/schema.sql            # GENERATED one-paste consolidation for fresh installs — never hand-edit
-supabase/build_schema.py       # Regenerates schema.sql; a test fails if the two drift
+supabase/migrations/           # 0001..0008 numbered SQL — THE schema reference (run BY HAND in the SQL editor)
 pwa/                           # Static PWA dashboard (separate Render Static Site; never in the container)
 recon/                         # Local statement-recon CLI (pypdf, checksum-gated parsers) — never ships
-scripts/                       # Local/ops helpers (LLM-usage summariser, WSL/OAuth setup)
+scripts/                       # setup-google-oauth.sh (optional Sheet backup), summarize_llm_usage.py
 samples/                       # GITIGNORED — real e-statement PDFs live here, never committed
-tests/                         # 587 tests across 9 files; see "Testing"
+tests/                         # 648 tests across 10 files; see "Testing"
+LICENSE                        # MIT
+CHANGELOG.md                   # Dated, human-readable
+.github/workflows/             # ci.yml (pytest + scrub gate) and anchor-check.yml (weekly upstream test)
 conftest.py                    # Repo root; sys.path fix + stubs tools.registry (framework-injected at runtime)
 ```
 
@@ -141,14 +151,24 @@ Check your diff against this list before every commit.
   Dockerfile in the same commit. Verify: each `tools/*.py` (except
   `__init__.py`) appears in a `COPY` line.*
 - **M2 — The Ghost Tool.** You register a tool in Python and the LLM never
-  sees it, because upstream `toolsets.py` hard-codes the telegram gateway's
-  tool list and our Dockerfile `sed` injection is what appends our names to
-  it. A tool missing from the sed list loads fine and is never callable.
-  *Rule: a tool name must appear in FOUR places in the same commit —
-  (1) `registry.register(name=…)` in `expense_sheets_tool.py`, (2) the
-  Dockerfile `RUN sed -i` line anchored on `"send_message",`, (3) a
-  SKILL.md that tells the LLM when to call it, (4) tests. Update the tool
-  count here (currently **37**: 22 core + 6 card + 5 travel + 4 loans).*
+  sees it. Until the 0.20.6 bump this was the Dockerfile `sed` injection
+  into upstream `toolsets.py`; that anchor (`"send_message",`) no longer
+  exists — upstream deleted the agent-callable `send_message` tool and the
+  whole `messaging` toolset in v0.16.0 — and the sed was silently doing
+  nothing (a `sed` address that matches nothing still exits 0). The sed is
+  gone. The mechanism is now `platform_toolsets`, and the trap moved with
+  it: **a platform whose `platform_toolsets` list omits `expense_tracker`
+  sees NONE of our tools, silently.** That is exactly how cron broke at
+  0.20.x — the scheduler now resolves tools per platform, and with no
+  `platform_toolsets.cron` entry every job runs with zero expense tools and
+  prints no warning at all.
+  *Rule: a tool name must appear in THREE places in the same commit —
+  (1) `registry.register(name=…)` in `expense_sheets_tool.py`, (2) a
+  SKILL.md that tells the LLM when to call it, (3) tests — AND the toolset
+  name `expense_tracker` must be present in EVERY `platform_toolsets.<platform>`
+  list that should see it (`telegram`, `webhook`, `cron`). Adding a new
+  platform means adding that entry. Update the tool count here (currently
+  **37**: 22 core + 6 card + 5 travel + 4 loans).*
 - **M3 — The Blind SHA Bump.** Bumping `HERMES_AGENT_SHA` without checking
   that the upstream anchor strings still exist. The build fails loud by
   design — never "fix" that by loosening an anchor.
@@ -166,9 +186,9 @@ Check your diff against this list before every commit.
   UTC conversion or tz-aware datetimes. In Apps Script, never round-trip
   dates through `new Date()` + `toISOString()` — that shifted DBS txn
   dates a day back once; `formatDBSDate` does string arithmetic on purpose.*
-- **M6 — The Local Install Trap.** Running `hermes-config/install.sh` in the
-  Render shell. It's a WSL dev helper and isn't in the container. *Rule:
-  the container's install path is the Dockerfile itself.*
+- **M6 — The Local Install Trap.** Looking for an install script to run
+  in the Render shell. There is none. *Rule: the container's install path
+  is the Dockerfile itself; changing what is installed means a rebuild.*
 
 ### Code (tools/)
 
@@ -232,7 +252,7 @@ Check your diff against this list before every commit.
   together.*
 - **M14 — The Backfill Contaminator.** Including `source="backfill"` or
   `UNCATEGORIZED` rows in analytics. Backfill rows are statement imports
-  (Sam's supplementary card); counting them corrupts subscription-creep,
+  (a supplementary card that never emails you); counting them corrupts subscription-creep,
   card-cycle spend, trip spend, and efficiency review. *Rule: every
   agent-side aggregate filters out `Source == "backfill"` and
   `_is_pending(row)`. `source` is a closed enum: `email | manual |
@@ -240,20 +260,15 @@ Check your diff against this list before every commit.
   `sheets_client.PENDING_CATEGORY` (imported by `supabase_client`) plus a
   separate `expense_sheets_tool._PENDING_CATEGORY` — the two must stay
   equal. Known, deliberate divergence: the PWA's monthly hero/chart COUNT
-  backfill and pending rows (honest cash-out totals — a deliberate
-  2026-07-31 call) — don't "fix" either side to match the other.*
+  backfill and pending rows (honest cash-out totals, a deliberate 2026-07-31
+  decision) — don't "fix" either side to match the other.*
 
 ### Sync contracts (places that must change together)
 
-- **M15 — The Upstream Assumption.** Treating this repo as a git fork of
-  something and reaching for `git pull`. It is not a fork of anything.
-  `alhazjm/hermes-agent` (itself a fork of NousResearch's) is cloned at
-  Docker BUILD time and pinned by `ARG HERMES_AGENT_SHA`; the private
-  deployment repo this was published from has no git relationship to this
-  one either. *Rule: framework updates are a SHA bump plus the four-anchor
-  checklist below — never a merge. Changes ported from another copy are
-  applied by hand, and the leak sweep runs every time (twice now a port has
-  dragged real card digits back in).*
+- **M15 — The Second Manual.** Creating a separate `CLAUDE.md` body "to
+  help Claude Code" and then letting the two drift. This repo has ONE
+  operating manual (this file); `CLAUDE.md` is a ten-line pointer at it.
+  *Rule: edit `AGENTS.md` only. Never paste its contents anywhere else.*
 - **M16 — The Split-Brain Parser.** Editing the email regexes in
   `apps-script/Code.gs` without `tests/test_email_parser.py` (a deliberate
   Python port of the same regexes, byte-for-byte), or vice versa. *Rule:
@@ -277,10 +292,11 @@ Check your diff against this list before every commit.
   (Code.gs), and run the latter manually in the Apps Script editor after
   deploy. This is also an ask-first change (see escalation rules).*
 - **M18 — The Tier-2 Dump.** Putting transactions, insights, budget numbers,
-  or session history into `USER.md` / `MEMORY.md` / `SOUL.md`. They load
-  into the system prompt EVERY turn. *Rule: respect each file's "what does
-  NOT belong here" list; MEMORY.md past ~200 lines or SOUL.md past ~60 is
-  a bug.*
+  or session history into `USER.md` / `MEMORY.md` / `SOUL.md`. `SOUL.md`
+  loads into the system prompt EVERY turn; `MEMORY.md`/`USER.md` are meant
+  to (see "Memory files" for why the COPY'd copies currently don't) and must
+  be sized as if they do. *Rule: respect each file's "what does NOT belong
+  here" list; MEMORY.md past ~200 lines or SOUL.md past ~60 is a bug.*
 - **(unnumbered) The subscription-detector three-way parity.** The
   billing-behaviour thresholds (≥2 distinct months; exactly 1 charge per
   month; day-of-month spread ≤4; every charge ≥ $0.50; consecutive step ≤
@@ -292,6 +308,21 @@ Check your diff against this list before every commit.
   both the PWA and the supabase twin (the sheets twin takes them as a
   parameter — it can't reach the table); `include` (declared no-email
   subs, amounts cross-checked against the budget row) is PWA-only today.
+- **(unnumbered) The ingest-skill mirror.** `skills/expense-ingest/SKILL.md`
+  is a slim SUBSET of `skills/expense-tracker/SKILL.md`, and it is the ONLY
+  skill the `expense-ingest` webhook route loads
+  (`cli-config.yaml → routes.expense-ingest.skills`). Why: upstream
+  `gateway/platforms/webhook.py` injects the WHOLE body of the route's
+  first skill into every webhook prompt, and expense-tracker (~10k tokens)
+  rode along in every API call of every ingest — 3–5 calls per
+  transaction. The token diet only stays honest if the two files agree.
+  *Rule: any edit to the categorisation order, the multi-category list,
+  the merchant heuristics, the silence contract (bubble_sent → EMPTY
+  reply), the webhook step list, or the travel / YouTrip routing rules in
+  expense-tracker MUST be mirrored into expense-ingest in the same commit
+  (and vice versa), with both versions bumped. Everything else (lending,
+  undo/edit, receipts, reports, journal, sweep, budgets, manual /log) is
+  deliberately absent from expense-ingest — don't "complete" it.*
 
 ## Conventions
 
@@ -376,27 +407,9 @@ registry.register(
 Card/travel/loans handlers lazy-import their module inside the handler
 (`from tools import card_optimiser`) — see M10. Also list the tool in the
 module docstring at the top of `expense_sheets_tool.py`. `_sheets_configured`
-(the universal `check_fn`, name kept from the sheet era) gates on Supabase
-alone — see the divergence note below.
-
-> **DELIBERATE DIVERGENCE from the private deployment repo — do not "fix".**
-> Upstream, `_sheets_configured()` also requires `GSPREAD_SPREADSHEET_ID` and
-> `GOOGLE_SERVICE_ACCOUNT_JSON`. That was correct during the migration
-> window, when the Sheet still powered the mutation mirror, the WebhookLog
-> sweep and the card/travel hooks. All three moved to Postgres and the gate
-> was never relaxed, so a fresh install had to stand up a Google Cloud
-> project, a service account and a spreadsheet before the agent could log
-> one expense — for a backup of data it did not have yet.
->
-> Here the Sheet is optional: `_sheets_configured()` requires only Supabase,
-> and `_sheet_export_configured()` gates the two tools that actually write to
-> the Sheet (`export_sheet_backup`, `archive_year_snapshot`), which return
-> `setup_required` and stay silent when it is absent — the same contract the
-> card optimiser uses before its tables exist. `tests/test_sheets_optional.py`
-> pins both halves, and the export cron prompt treats `setup_required` as
-> silence.
->
-> Expect a conflict here on every sync from upstream. Keep this side.
+(the universal `check_fn`, name kept from the sheet era) gates on the
+Supabase pair only; `_sheet_export_configured()` separately gates the two
+Sheet export tools, so Google Cloud is optional for a cloner.
 
 ### Return-shape contracts (the skill layer branches on these)
 
@@ -412,8 +425,8 @@ alone — see the divergence note below.
   category). Never bypass the guard.
 - Card optimiser: every public function starts
   `gate = _check_setup(); if gate: return gate` →
-  `{"status": "setup_required", "message": …}` until the `Cards` +
-  `CardStrategy` tabs (incl. the `_default` sentinel row) exist. The skill
+  `{"status": "setup_required", "message": …}` until the `cards` +
+  `card_strategy` tables (incl. the `_default` sentinel row) exist. The skill
   surfaces that message in one line and stops — preserve the gate.
 - Travel mode does NOT use `status` uniformly: `get_active_travel_mode`
   returns an `active: bool`; `get_trip_budget_status` can return
@@ -429,8 +442,8 @@ alone — see the divergence note below.
 
 ### Tests
 
-- Run: `.venv-test/Scripts/python.exe -m pytest tests/ -q` (ready venv on
-  a prepared venv) or `pip install pytest gspread google-auth cffi` first.
+- Run: `pip install pytest gspread google-auth cffi` once, then
+  `pytest tests/ -q`.
   `cffi` is a hidden hard dependency — `pyo3_runtime.PanicException` at
   collection means it's missing.
 - Structure: class per unit (`TestLogExpense`, `TestCycleWindow`), plain
@@ -463,8 +476,8 @@ alone — see the divergence note below.
   (`assert_called_once_with`, including `""`→`None` coercions) and JSON
   round-trip.
 - The fake registry accepts anything silently — a mis-registered tool will
-  NOT fail tests. That's what the Dockerfile sed check and the preflight
-  skill are for.
+  NOT fail tests. That's what `platform_toolsets` in `cli-config.yaml` and
+  the boot log (no "Unknown toolset", no check_fn warning for our tools) are for.
 - The canonical 11-column header for fixtures:
   `Date, Merchant, Amount, Currency, Category, Source, Payment Method,
   Notes, txn_id, telegram_message_id, idempotency_key`. Legacy-layout tests
@@ -501,11 +514,26 @@ alone — see the divergence note below.
   expense-tracker toolset — no tool files of their own. Travel-mode,
   trip-pot, YouTrip-spend, and lending rules live INSIDE expense-tracker
   (there is no separate travel or loans skill).
+- expense-ingest is a SUBSET of expense-tracker (categorisation order,
+  multi-category list, heuristics, silence contract, webhook steps,
+  travel/YouTrip rules — nothing else), loaded only by the webhook route
+  as a token diet. It is mirror-locked to expense-tracker — see "The
+  ingest-skill mirror" in Sync contracts; edit both, bump both versions.
+- **Slash-commands the user types need a bundle.** Since 0.20.x the
+  gateway answers any slash-command it does not recognise with "Unknown
+  command" and never forwards it to the model — there is no config switch.
+  `/log`, `/undo`, `/budget`, `/summary` work only because
+  `hermes-config/skill-bundles/<name>.yaml` exists for each (a bundle
+  registers `/<name>`, injects the listed skill bodies plus the user's
+  text, then runs a normal turn; bundles are dispatched BEFORE skills).
+  If a SKILL.md starts teaching a new `/command`, ship its bundle in the
+  same commit and add it to `EXPECTED_COMMANDS` in
+  `tests/test_skill_bundles.py`. Found in production 2026-09-04.
 - The `.claude/skills/` skills are a DIFFERENT species: repo-side Claude
   Code workflows (/statement-recon, /card-tnc-review, /new-alert-source)
   that never ship to the container and are run by a human from the repo.
-- If a skill references a tool, that tool must exist in the Dockerfile sed
-  list. If a cron prompt in `setup-cron-jobs.sh` encodes a skill behavior
+- If a skill references a tool, that tool must be registered in
+  `expense_sheets_tool.py` and reachable via `platform_toolsets`. If a cron prompt in `setup-cron-jobs.sh` encodes a skill behavior
   (e.g. "skip the cards section on setup_required"), keep prompt and skill
   consistent in the same commit.
 
@@ -532,6 +560,12 @@ alone — see the divergence note below.
   fires (the Sheet `WebhookLog` tab is the fallback target, with a
   Telegram warning because the sweep can't see Sheet-only rows), and why
   the sweep exists. Preserve that ordering.
+- Pacing: at most `MAX_WEBHOOKS_PER_TICK` (2) webhook posts per 5-min
+  tick, `WEBHOOK_SPACING_MS` (20s) apart; the rest stay UNREAD (no audit
+  row, no markRead) for the next tick — this is the token-free ingest
+  queue (each POST is its own concurrent hermes session, ~28k tokens x
+  3-5 calls; two in one tick broke OpenAI's Tier-1 200k TPM ceiling,
+  2026-08-15). Only sends count, not scanned emails or fx_failed alerts.
 - The nightly ~04:00 Render restart also lives here
   (`restartRenderService` + `RENDER_API_KEY`) — memory hygiene for the
   512MB container; its trigger is created once by hand
@@ -540,8 +574,17 @@ alone — see the divergence note below.
   `JSON.stringify(payload)` string, bytes masked `& 0xFF`.
 - Currency is captured dynamically (`[A-Z]{3}`) — hard-coding SGD silently
   drops foreign transactions (real incident, 2026-04-26). Non-SGD converts
-  via frankfurter.app; on FX failure: audit row `fx_failed`, no webhook,
-  one-line Telegram alert, user logs manually.
+  via frankfurter.dev (`api.frankfurter.app` now 301-redirects there,
+  2026-08-17); BND converts at the 1:1 SGD peg in Code.gs itself
+  (frankfurter has no BND — a Brunei hotel, 2026-08-29, failed permanently);
+  on FX failure: audit row `fx_failed`, no webhook, one-line Telegram
+  alert, user logs manually. `debugAudit()` (run manually in the editor)
+  live-tests the Supabase audit write and the Telegram alert path — both
+  fail SILENTLY when Script Properties are wrong. The Script Property
+  `SUPABASE_SERVICE_KEY` must be the LEGACY `service_role` JWT (`eyJ…`),
+  never an `sb_secret_*` key — Supabase browser-blocks secret keys and
+  UrlFetchApp's Mozilla User-Agent cannot be overridden (the 2026-09-01
+  silent-audit incident: a month of 401s into the Sheet fallback).
 - The webhook payload shape is documented in `hermes-config/MEMORY.md`
   (plus a `notes` field when FX ran). If you change the payload, update
   MEMORY.md and the route template in `cli-config.yaml` together.
@@ -549,37 +592,52 @@ alone — see the divergence note below.
   the parity pins (M16/M17), and the PR body must say
   "requires `clasp push`" plus any new Script Properties.
 
-### Docs
+### Docs, roadmaps, handoffs
 
 - Architecture decisions get an RFC-style doc in `docs/`: Problem (with the
   real dated incident) → Goals/Non-goals → Decisions with rationale →
   Sheet schema tables → Tool surface with JSON examples → Risk table →
   Open decisions → v1 exit criteria as checkboxes. Copy
   `docs/CARD-OPTIMISER-ARCHITECTURE.md`'s shape.
+- `docs/HANDOFF-*.md` (none are checked in here; write one when needed) is the session-resumption genre: branch state,
+  non-negotiables, what already shipped, implementation checklist,
+  verification recipe, PR-body template. Write one whenever work will be
+  finished by a different session.
 - For what ships today, THIS file + `supabase/migrations/` are
-  authoritative. `docs/SETUP.md` is the cloner-facing first-run guide and
-  the only doc a new user needs; `docs/STATEMENT-RECON.md` documents the
-  monthly ground-truth ritual.
+  authoritative. `docs/SETUP.md` is the cloner-facing first-run guide;
+  `docs/UPGRADING-HERMES.md` is how the upstream pin moves;
+  `docs/STATEMENT-RECON.md` documents the monthly ground-truth ritual.
 - Docs are kept honest: when a framing turns out wrong, rewrite it rather
   than paper over.
 
 ### Memory files (hermes-config/)
 
 `USER.md` (identity/preferences), `MEMORY.md` (system facts: schema,
-webhook shape, enums), `SOUL.md` (persona, ~50 lines) are tier-2 memory
-loaded every turn. Keep them small; each has a "what does NOT belong here"
-rule — respect it (M18). Transaction data, insights, category lists live in
-Supabase; session history lives in FTS5.
+webhook shape, enums), `SOUL.md` (persona, ~50 lines) are tier-2 memory.
+Keep them small; each has a "what does NOT belong here" rule — respect it
+(M18). Transaction data, insights, category lists live in Supabase; session
+history lives in FTS5.
+
+**Which of them actually load (verified at v0.21.0, 2026-09-04).** Only
+`SOUL.md` does. The prompt builder reads `SOUL.md` from `HERMES_HOME`, which
+is exactly where the Dockerfile COPYs it. But `MEMORY.md` and `USER.md` are
+read by the memory store from `HERMES_HOME/memories/` — and `start.sh`
+symlinks that path to `/data/memories`, so the two files COPY'd to
+`/root/.hermes/` have never been in the system prompt at all. What the agent
+reads under those names is whatever lives on the persistent disk. This is
+pre-existing (it predates the 0.20 bump, and the bump does not change it),
+and it is deliberately NOT fixed here — seeding them would change agent
+behaviour and belongs in its own PR. Until then: edits to
+`hermes-config/MEMORY.md` / `USER.md` are documentation of intent, not a
+deploy. Keep writing them correctly; just don't assume they took effect.
 
 ### Git & PR style
 
 - Feature branches: `claude/<slug>`, pushed directly; PRs opened
-  ready-for-review against `main` on your own fork. Merging to `main`
-  deploys to Render, so treat `main` as production.
+  ready-for-review against `main` on
+  your fork (the original lives at `alhazjm/kevin-agent`). Merging to `main` deploys to Render.
 - Commits: short imperative subject, blank line, 1–3 sentence body that
-  explains the WHY (and for bug fixes, the root cause). End with the
-  session trailer (`https://claude.ai/code/session_*`) when the session
-  provides one.
+  explains the WHY (and for bug fixes, the root cause).
 - Opportunistic bug fixes found mid-feature may ride along in the active
   PR, but each gets its own line in the PR body with its root cause.
 - PR body states: what changed, why, how it was verified (test count), and
@@ -588,10 +646,12 @@ Supabase; session history lives in FTS5.
 
 ## Data schema (Supabase)
 
-`supabase/migrations/0001..0007` are THE schema reference — numbered SQL
+`supabase/migrations/0001..0008` are THE schema reference — numbered SQL
 files, run BY HAND in the Supabase SQL editor, append-only (new files, new
 policies via the idempotent `do $$ … duplicate_object` pattern; `create
-table if not exists`). Fourteen tables:
+table if not exists`). Fifteen tables (`supabase/schema.sql` is all of them concatenated,
+generated by `supabase/build_schema.py`; regenerate it in the same commit as
+any new migration — `tests/test_schema_consolidation.py` fails otherwise):
 
 **`transactions`** (append-only ledger; read paths return Sheet-shaped
 dicts with these headers):
@@ -624,16 +684,20 @@ hand-maintained; card_strategy requires the `_default` sentinel row;
 / `trip_nudge_log` (nudge
 dedup, auto-written), `travel_mode` (trip definitions), `loans` (IOUs,
 0005), `sub_overrides` (subscription verdicts, 0006 — keys are normalized
-CATEGORY names).
+CATEGORY names), `category_meta` (0008 — `kind` = `fixed` | `variable`;
+fixed monthly bills are excluded from over-80% warnings and surface only
+when OVER their usual amount; `get_spending_summary` stamps `kind` on
+every row and precomputes `_attention.lines`, which the review prompts
+print verbatim; absent table → everything reads `variable`).
 
 RLS everywhere: the agent writes with the service key (bypasses RLS,
 server-side only); the PWA authenticates via email OTP and `is_owner()`.
 PWA write policies are deliberately narrow: budgets (0002), transaction
 category updates (0004), loan status flips (0005), sub_overrides (0006).
-`is_owner()` in 0001 pins a single address — change it to yours BEFORE
-running the migration, or the PWA signs in and renders nothing. If you
-ever widen it by hand in the SQL editor, land the same change as a new
-migration; a live function that no migration describes is drift.
+If you ever widen `is_owner()` by hand (a second login address), land the
+same change as a new numbered migration too — a live function no migration
+describes is drift, and the next fresh install silently gets different
+access rules.
 
 ### Travel mode + trip pots — design constraints
 
@@ -650,9 +714,41 @@ migration; a live function that no migration describes is drift.
   construction).
 - A txn's bucket is stamped into `Notes` as a `[bucket:X]` prefix —
   deliberately NOT a column (M13).
-- Activation needs all three: txn notes carry `orig:` (FX-converted),
-  `get_active_travel_mode()` active, NO MerchantMap match (learned
-  mappings beat travel mode).
+- Trip routing is DETERMINISTIC and lives in the TOOL
+  (`travel_mode.route_for_trip`, called inside `log_expense` /
+  `log_expense_pending` before the append — the model never routes).
+  When a trip covers the txn date, ONE signal is enough: (A)
+  `payment_method` contains "youtrip" (Shortcut taps; pot-internal as
+  before), or (B) notes carry `orig:` (bank FX-converted abroad), or (C)
+  a manual non-SGD `currency` — converted to SGD in the tool FIRST
+  (`_fx_to_sgd`, frankfurter, stamped `orig: MYR 33.00 @ 0.313220
+  (frankfurter YYYY-MM-DD)` exactly like Code.gs) and then routed as B.
+  Routed = category → the trip's `trip_category`, `[bucket:X]` derived
+  from the model's PROPOSED home category via `_bucket_for_category`
+  (food/transport/shopping/health/lodging/misc keyword map; an existing
+  `[bucket:]` is respected). MerchantMap now decides the BUCKET, never
+  the category — the old "a learned mapping beats travel mode" rule is
+  dead (it sent Gojek-in-KL to the home Personal - Travel budget → 912%).
+  No signal (SGD, no `orig:`, not YouTrip — Shopee for home, PayLah to a
+  friend) → NORMAL flow untouched: currency/pot is the guard against
+  "everything during the trip is travel", not the date. Never routed:
+  YouTrip top-ups (`[trip:]`-tagged via `link_topup_to_trip` instead),
+  rows already in the trip category, fixed monthly bills (`category_meta`
+  kind `fixed` — Anthropic bills in USD mid-trip carry `orig:` but are
+  not trip spend), calls with `route_to_trip: false` (user said "not a
+  trip cost"), and any trip whose category doesn't resolve against
+  `budgets` (`create_trip` ensures the $0 row; without it the home
+  category lands rather than an unknown_category refusal). Pending flow: a signalled spend
+  skips the ask-prompt and logs straight into the trip category with
+  `[bucket:misc]` + the normal bubble. The applied routing is reported as
+  `trip_routed: {trip_label, from_category, to_category, bucket,
+  signal}`; FX failure returns `status=error, reason=fx_failed` with
+  nothing written and no bubble. The model's only job during a trip:
+  propose the HOME category as always and pass currency / notes /
+  payment_method / time / idempotency_key through. Manual foreign entries
+  ("rm33") mean CASH unless the user names YouTrip (product decision, 2026-08-18):
+  no payment method → converted, routed via `orig:`, COUNTED in the month;
+  `payment_method="YouTrip Card"` only when the user says so (pot-internal).
 - 80%/100% bucket alerts dedupe via `trip_nudge_log` keyed on
   (trip, bucket, threshold, budget_at_nudge) — a mid-trip reallocation
   re-arms the nudge.
@@ -676,22 +772,46 @@ windows on the same tile. Cap bands: ok <80%, warning 80–99%, capped
    pruning upstream's built-in skill catalogs); `hermes-config/cli-config.yaml`
    → `/root/.hermes/config.yaml`; `USER.md`/`MEMORY.md`/`SOUL.md` →
    `/root/.hermes/`; `deploy/start.sh` → `/app/start.sh`;
-   `cron/setup-cron-jobs.sh` → `/app/cron/`. `pwa/`, `recon/`, `scripts/`,
-   and `.claude/` never ship.
-2. **The tool-list sed injection** (M2): `RUN sed -i` anchored on
-   `"send_message",` in upstream `toolsets.py` — search for the anchor,
-   don't trust line numbers. Tool registration itself is activated by the
-   `printf 'import tools.expense_sheets_tool' >> model_tools.py` line.
-3. **Four build-time patches** in `deploy/patches/`, applied to upstream
-   source: `suppress_reply_on_silent_tools.py` (v2 — EXITS the agent loop
-   when the latest tool result carries `"assistant_reply_required":
-   false`; v1 zeroed `final_response` and triggered the empty-response
-   retry cascade), `suppress_retry_status_after_silent_tools.py`,
-   `suppress_codex_incomplete_after_silent_tools.py`, and
-   `log_llm_usage.py` (usage JSONL to `/data`). Each requires its anchor
-   to match exactly once and exits non-zero otherwise → Docker build
-   fails loud; the Dockerfile greps for marker strings after. Never
-   weaken these checks.
+   `cron/setup-cron-jobs.sh` → `/app/cron/`;
+   `hermes-config/skill-bundles/` → `/root/.hermes/skill-bundles/`. `pwa/`,
+   `recon/`, `scripts/`, and `.claude/` never ship.
+2. **How our tools reach the model** (M2): `platform_toolsets` in
+   `cli-config.yaml` — one list per platform, each containing
+   `expense_tracker`. There is no sed injection any more (removed at the
+   0.20.6 bump; its `toolsets.py` anchor is gone upstream). Registration is
+   auto-discovered — `tools/registry.py::discover_builtin_tools()`
+   AST-scans `tools/*.py` for a top-level `registry.register()` — but the
+   `printf 'import tools.expense_sheets_tool' >> model_tools.py` line is
+   KEPT as a fail-loud canary, because discovery swallows an `ImportError`
+   as a log warning and would ship zero tools silently.
+3. **TWO build-time patches** in `deploy/patches/`, both applied to
+   `agent/conversation_loop.py` (upstream v0.15.0 extracted the agent loop
+   out of `run_agent.py` into the module-level function
+   `run_conversation(agent, …)` — there is no `self` in that scope):
+   `suppress_reply_on_silent_tools.py` (**v3** — exits the agent loop when
+   the latest tool result carries `"assistant_reply_required": false`,
+   scanning only THIS turn's messages, and emits the literal `NO_REPLY`;
+   an empty `final_response` is now rewritten into a delivered
+   "⚠️ Processing completed but no response was generated" bubble before
+   any silence check runs, so v2's `""` would have put one junk bubble in
+   Telegram per logged expense) and `log_llm_usage.py` (usage JSONL to
+   `/data`; its injection imports `datetime`/`Path` locally because
+   `conversation_loop.py` imports neither, and the surrounding
+   `except Exception: pass` would turn a `NameError` into a permanently
+   empty usage log).
+   Three patches were RETIRED at the 0.20.6 bump because upstream now does
+   the job: `suppress_retry_status_after_silent_tools.py` (retry statuses
+   are buffered and only flushed on terminal failure),
+   `suppress_codex_incomplete_after_silent_tools.py` (the sentinel is
+   hidden gateway-side, and patch v3 exits before the continuation block
+   anyway), and `skip_memory_flush_for_webhook_sessions.py`
+   (`_flush_memories_for_session` no longer exists — the expiry watcher
+   runs no agent, so the 2026-08-17 ~40%-of-tokens burn is fixed upstream).
+   Each surviving patch requires its anchor to match exactly once and exits
+   non-zero otherwise → Docker build fails loud; the Dockerfile greps for
+   marker strings after. Never weaken these checks. Both honour a
+   `PEHD_PATCH_TARGET` env override so they can be sanity-run locally
+   against a downloaded upstream `conversation_loop.py`.
 4. **Two filesystems**: `/root/.hermes/` is rebuilt every deploy —
    ephemeral. `/data/` is the Render persistent disk: `service-account.json`
    plus `sessions`/`memories`/`cron` symlinked in by `start.sh` (which
@@ -709,8 +829,8 @@ windows on the same tile. Cap bands: ok <80%, warning 80–99%, capped
    config placeholders (M4): `__WEBHOOK_SECRET_PLACEHOLDER__` and
    `__OPENAI_KEY_PLACEHOLDER__` (the STT key).
 6. **Memory hygiene trio** (512MB container): Dockerfile sets
-   `MALLOC_ARENA_MAX=2`, explicitly UNINSTALLS `faster-whisper` (its
-   ~150MB model caused the 2026-07-30 OOM; STT is the OpenAI API —
+   `MALLOC_ARENA_MAX=2`, does NOT install the `[voice]` extra that carries
+   `faster-whisper` (its ~150MB model caused the 2026-07-30 OOM; STT is the OpenAI API —
    `gpt-4o-mini-transcribe` — instead), and the Apps Script nightly
    ~04:00 Render restart resets the RSS baseline. `ffmpeg` is installed
    for Edge-TTS voice bubbles (mp3 → OGG/Opus for Telegram send_voice).
@@ -718,8 +838,16 @@ windows on the same tile. Cap bands: ok <80%, warning 80–99%, capped
 8. Gateway runs foreground (`hermes gateway run`) — `gateway start` needs
    systemd, which Docker lacks. Webhook listens on 8644.
 9. `cron.wrap_response: false` in cli-config.yaml suppresses the cron
-   executor's wrapper text — an undocumented-but-supported upstream flag
-   (`cron/scheduler.py:313` at the pinned SHA). Re-verify on SHA bumps.
+   executor's wrapper text — still honored at v0.21.0 (grep
+   `wrap_response` in `cron/scheduler.py`; it is documented in
+   `config_defaults.py` now, default True). Re-verify on SHA bumps.
+10. **Cron tools are allowlisted per platform** since v0.20.x:
+   `platform_toolsets.cron` in cli-config.yaml is the ONLY thing that puts
+   the 37 expense tools in front of the six scheduled jobs, and its absence
+   fails silently. `hermes cron create` has no toolset flag, so this cannot
+   be fixed in the seeding script. Cron jobs with nothing to report must
+   reply `[SILENT]` — an empty response suppresses delivery but is booked
+   as a soft-fail that feeds the failure-streak nudge.
 
 ## Testing
 
@@ -730,14 +858,14 @@ pytest tests/test_travel_mode.py              # one file
 pytest tests/ -k "idempotency"                # by keyword
 ```
 
-On Windows: `.venv-test/Scripts/python.exe -m pytest tests/ -q`.
-Current count: **587 passing** across nine files:
+Current count: **648 passing** across ten files:
 `test_expense_sheets_tool` (also covers `sheets_client`),
 `test_supabase_client`, `test_card_optimiser`, `test_travel_mode`,
 `test_loans`, `test_email_parser` (the Apps Script mirror, M16),
-`test_statement_recon`, `test_schema_consolidation` (keeps
-`supabase/schema.sql` honest against the migrations), and
-`test_sheets_optional` (pins Sheets as optional, Supabase as required). State the new total in every PR body.
+`test_statement_recon`, `test_skill_bundles` (the slash-command bundles:
+every listed skill exists, the Dockerfile ships the dir),
+`test_sheets_optional` (Google Sheets stays optional) and
+`test_schema_consolidation` (`schema.sql` matches the migrations). State the new total in every PR body; CI runs the same suite on every push.
 
 ## Checklists
 
@@ -745,14 +873,17 @@ Current count: **587 passing** across nine files:
 1. Logic in the right layer (`supabase_client.py`, or the feature module).
 2. Schema constant + `handle_*` + `registry.register` block in
    `expense_sheets_tool.py`; add to the module docstring list.
-3. Add the name to the Dockerfile sed injection (M2).
+3. No Dockerfile change needed for the tool name (the sed is gone) — but
+   confirm `expense_tracker` is in every `platform_toolsets` list in
+   `cli-config.yaml` that should see it (M2).
 4. Reference it from the owning SKILL.md (when to call, example) + bump
    the skill version.
 5. Tests: ≥2 handler tests (kwargs pass-through + JSON round-trip) + a
    behavior class for the logic (happy path, each non-ok status, legacy
    sheet layout if it touches the export path).
 6. New table/column? → schema-change checklist too.
-7. Update the tool count/list in this file AND `AGENTS.md`.
+7. Update the tool count in this file, `README.md` and `docs/SETUP.md`
+   (a script in the sync PR checked all three; keep them equal).
 
 ### Adding a new config file
 1. Put it in an already-COPY'd directory, or add a COPY line.
@@ -764,23 +895,20 @@ Current count: **587 passing** across nine files:
    one): `create table if not exists`, policies via the idempotent
    `do $$ … duplicate_object` pattern. NEVER rename, reorder, or delete
    existing columns/tables (ask first — escalation rules).
-1b. Regenerate the one-paste consolidation in the SAME commit:
-   `python supabase/build_schema.py`. `tests/test_schema_consolidation.py`
-   fails if you forget, and a stale `schema.sql` silently omits your table
-   from every fresh install. Never hand-edit `schema.sql`.
 2. The migration runs BY HAND in the Supabase SQL editor — the PR body
    must name it as a manual step (surface 3).
 3. Code degrades gracefully pre-migration (guarded reads, absent table →
    empty/skip, never throw — the loans/sub_overrides fetches are the
    pattern).
 4. Update `MEMORY.md`'s schema section; if the export tab layout changes,
-   the Sheet-export writer and `docs/SETUP.md` §8 too.
+   the Sheet-export writer too.
 5. Tests for both presence and absence of the new column/table.
 
 ### Editing a skill
 1. Check the edit against the behavioral invariants list (Skill files
    section). 2. Bump the version per semver rule. 3. Verify every tool
-   named exists in the sed list. 4. If a cron prompt encodes the same
+   named is registered and that `expense_tracker` is in the relevant
+   `platform_toolsets` list. 4. If a cron prompt encodes the same
    behavior, update `cron/setup-cron-jobs.sh` in the same commit (and note
    that live cron jobs only pick it up after deleting `/data/cron/.seeded`
    or editing via `hermes cron`).
@@ -793,31 +921,72 @@ Current count: **587 passing** across nine files:
    the Apps Script editor if keying changed.
 
 ### hermes-agent SHA bump
-Upstream is pinned by `HERMES_AGENT_SHA` in the Dockerfile. The four patch
-scripts in `deploy/patches/` depend on upstream anchor strings — each fails
-the Docker build loudly if its anchor shifts. Before bumping, verify at the
-candidate SHA
-(`raw.githubusercontent.com` fetches are pre-allowed):
-1. `toolsets.py` still contains `"send_message",` exactly once (the sed
-   appends after EVERY match — duplicates would double-inject).
-2. `run_agent.py` still contains the line
-   `                    final_response = assistant_message.content or ""`
-   (20-space indent, no-tool-calls branch) exactly once. If refactored,
-   update `ANCHOR` + `INJECTION` in
-   `deploy/patches/suppress_reply_on_silent_tools.py` to match the new loop
-   shape — and treat that as an ask-first change.
-3. `model_tools.py` still exists (the Dockerfile appends an import to it).
-4. `cron/scheduler.py` still honors `wrap_response`.
+`docs/UPGRADING-HERMES.md` is the procedure; the weekly
+`.github/workflows/anchor-check.yml` runs every item below against the
+newest upstream tag and reports into an issue. This list is the contract.
+Upstream is pinned by `HERMES_AGENT_SHA` in the Dockerfile (currently
+`29112bef` = v0.21.0, tag `v2026.8.31`; the 0.20.6 → 0.21.0 step on
+2026-09-04 moved nothing we anchor on). The two patch scripts in
+`deploy/patches/` depend on upstream anchor strings — each fails the Docker
+build loudly if its anchor shifts. Pin to a TAG, never floating `main`.
+Before bumping, verify at the candidate SHA (`raw.githubusercontent.com`
+fetches are pre-allowed; download the files once and grep locally):
+1. `agent/conversation_loop.py` still contains
+   `            if agent.api_mode == "codex_responses" and finish_reason == "incomplete":`
+   (12-space indent) exactly once — the `suppress_reply_on_silent_tools.py`
+   v3 anchor. Also confirm `current_turn_user_idx`, `messages`,
+   `final_response`, `_turn_exit_reason` and `assistant_message` are still
+   locals of `run_conversation` bound before that line, and that a `break`
+   there still exits the MAIN agent loop (not an inner one). If refactored,
+   update `ANCHOR` + `INJECTION` — an ask-first change.
+2. `agent/conversation_loop.py` still contains the 20-space
+   `agent.session_cost_status = cost_result.status` /
+   `agent.session_cost_source = cost_result.source` / blank /
+   `# Persist token counts to session DB for /insights.` block exactly once
+   — the `log_llm_usage.py` anchor — and still does NOT import `datetime`
+   or `Path` at module level (the injection imports them itself; if that
+   ever changes, the local imports stay harmless).
+3. `gateway/response_filters.py` still lists `NO_REPLY` in
+   `LIVE_GATEWAY_SILENT_MARKERS`, and both the strict
+   (`is_intentional_silence_response`, telegram lane) and loose
+   (`is_autonomous_silence_response`, webhook + cron lanes) matchers still
+   accept it. This is what makes patch v3's emitted token silent; if the
+   marker set changes, the silence contract breaks on every lane at once.
+4. `agent/conversation_loop.py` still routes retry statuses through
+   `agent._buffer_status(…)`, not `_emit_status` — that buffering is why
+   the retry-status patch was retired.
+5. `model_tools.py` still exists (the Dockerfile appends an import to it)
+   and `tools/registry.py` still auto-discovers top-level
+   `registry.register()` in `tools/*.py`.
+6. `cron/scheduler.py` still honors `wrap_response`, and still resolves a
+   job's tools via the `cron` platform's `platform_toolsets` entry — if
+   that resolution changes again, re-check that all 37 tools still reach
+   the six jobs (they fail SILENTLY when they don't).
+7. `hermes_cli/config_defaults.py`: re-enumerate default-ON auxiliary
+   forks. We explicitly disable `auxiliary.background_review`,
+   `auxiliary.title_generation`, `curator`, `lsp` and `model_catalog`; a
+   new one added upstream would start costing tokens/RAM on the next bump
+   without any config change on our side.
+8. A top-level `skills/` directory still exists in the clone (the
+   Dockerfile prunes it; the gateway re-seeds from it on every start).
+9. `pyproject.toml` still defines the `all`, `messaging` and `edge-tts`
+   extras the Dockerfile installs, and `requires-python` still admits 3.11.
+10. `gateway/run.py` still dispatches skill BUNDLES before skills and still
+   reads them from `HERMES_HOME/skill-bundles/*.yaml`
+   (`agent/skill_bundles.py`); and the unknown-slash-command block still
+   exists (it is what makes the bundles load-bearing — if upstream ever
+   forwards unknown commands again, the bundles become optional, not
+   wrong).
 Record what you verified in the commit body. If any anchor drifted, STOP
 and present findings — never loosen an anchor to make the build pass.
 
 ## Quality bar per deliverable (done = all boxes check)
 
-**A new tool** — the four-place rule (M2) satisfied; handler returns a JSON
+**A new tool** — the three-place rule + `platform_toolsets` (M2) satisfied; handler returns a JSON
 string and never raises; status vocabulary from the contracts section (no
 new statuses without a skill consumer); silence contract complete if it
 sends Telegram (M9); tests as per checklist; suite green with the new count
-stated; tool count updated here + AGENTS.md.
+stated; tool count updated in this file, README.md and docs/SETUP.md.
 
 **A bug fix** — commit body names the root cause (not just the symptom); a
 regression test exists that fails on the pre-fix code; no drive-by
@@ -826,33 +995,33 @@ says what manual correction (SQL) is needed (or that none is).
 
 **A skill edit** — version bumped; all six behavioral invariants still
 present in the text (grep for "EMPTY", "learn_merchant_mapping",
-"tables"); every referenced tool exists in the sed list; cron prompts
+"tables"); every referenced tool is registered and reachable via
+`platform_toolsets`; cron prompts
 consistent; no schema/tool facts duplicated into the skill that belong in
 MEMORY.md or the ledger.
 
 **A schema change** — a new numbered migration, append-only; graceful
-pre-migration degradation; `MEMORY.md` updated (and the export writer +
-`docs/SETUP.md` §8 if tab layouts change); the manual SQL step
+pre-migration degradation; `MEMORY.md` updated (and the export writer if tab layouts change); the manual SQL step
 named in the PR body; presence+absence tests.
 
 **An Apps Script change** — regex/parity mirrors updated in the same
 commit; suite green; PR body carries the deploy steps; no
 `new Date()`-based date conversion introduced (M5).
 
-**Any PR** — suite green with count stated; commit style honored; PR body lists every manual
+**Any PR** — suite green with count stated; `AGENTS.md` updated where it
+describes the changed behaviour; commit style honored; PR body lists every manual
 step a human must take (clasp paste, SQL migrations, env vars, cron
 re-seed); if nothing manual is needed, it says so explicitly.
 
 ## When uncertain — escalation rules
 
 **Resolution ladder** (exhaust in order before asking):
-1. This file. 2. `supabase/migrations/` for anything schema
-(`docs/SETUP.md` §8 for the two exported tab layouts).
+1. This file. 2. `supabase/migrations/` for anything schema.
 3. The owning SKILL.md for runtime behavior contracts. 4. The tests — they
 are the executable spec (a behavior pinned by a test is a contract, not an
 accident). 5. Upstream hermes-agent source at the pinned SHA via
-`raw.githubusercontent.com/alhazjm/hermes-agent/<SHA>/<path>` (pre-allowed
-domain). 6. Ask the maintainer.
+`raw.githubusercontent.com/NousResearch/hermes-agent/<SHA>/<path>` (pre-allowed
+domain). 6. Ask the repo owner — for a fork, that is you.
 
 **Proceed without asking** (reversible, checklist-covered): new tools per
 the checklist; additive tests; doc syncs; comment/docstring improvements;
@@ -880,8 +1049,8 @@ options, recommendation first, one screenful max):
 - Tests fail in an area your diff didn't touch: report, don't "fix" the
   test to green.
 - The live Supabase schema doesn't match `supabase/migrations/` (a
-  hand-run SQL change never made it into a migration file): reconcile
-  with the maintainer before writing code against either.
+  hand-run SQL change never made it into a migration file): stop and
+  reconcile the two before writing code against either.
 - You'd need a secret/credential that isn't in the documented env vars.
 
 **How to ask**: numbered options with your recommendation first and the

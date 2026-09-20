@@ -52,7 +52,7 @@ for dir in sessions memories cron llm_usage; do
     fi
 done
 
-# Session retention (agreed with Hadi 2026-07-28): ROLLING windows keyed on
+# Session retention (design decision, 2026-07-28): ROLLING windows keyed on
 # last-activity mtime, applied at every start — the 04:00 nightly restart
 # makes this effectively daily. Cron-job transcripts (~2/3 of disk growth,
 # near-zero recall value): 30 days. Everything else (chats, webhook
@@ -72,13 +72,15 @@ if [ -n "${WEBHOOK_HMAC_SECRET:-}" ]; then
     sed -i "s/__WEBHOOK_SECRET_PLACEHOLDER__/${WEBHOOK_HMAC_SECRET}/" "$HERMES_HOME/config.yaml"
     echo "Webhook secret injected into config"
 else
-    # Fail LOUD: the placeholder is a literal string published in this repo,
-    # so an unset secret means the ingest route will accept any request signed
-    # with a value anyone can read. Every webhook is a ledger write.
-    echo "WARNING: WEBHOOK_HMAC_SECRET empty at boot — the config still holds"
+    # Fail LOUD. Without the substitution the config keeps the literal
+    # __WEBHOOK_SECRET_PLACEHOLDER__ as the signing key, and that string is
+    # published in the public mirror — so the ingest route would verify
+    # signatures against a value anyone can read. Every accepted webhook is
+    # a ledger write. Silence here is how that ships unnoticed.
+    echo "WARNING: WEBHOOK_HMAC_SECRET empty at boot — config still holds"
     echo "WARNING: __WEBHOOK_SECRET_PLACEHOLDER__, which is PUBLIC. Anyone who"
     echo "WARNING: knows this URL can sign a valid payload and write fabricated"
-    echo "WARNING: transactions to your ledger. Set the variable and redeploy."
+    echo "WARNING: transactions to the ledger. Set the variable and redeploy."
 fi
 
 # Inject the OpenAI key for voice STT (same M4 placeholder pattern as the

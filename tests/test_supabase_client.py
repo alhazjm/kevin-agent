@@ -138,6 +138,102 @@ class TestAppendTransaction:
             "2026-04-16", "Starbucks", 5.50, "DBS card ending 1234")
         assert result["idempotency_key"] == expected
 
+    def test_payload_provided_key_wins_over_recompute(self):
+        # End-to-end idempotency (2026-08-02 Gojek double-log): the Apps
+        # Script's key ships in the payload and is used AS GIVEN, so
+        # retried webhooks dedupe even when the LLM's other arguments
+        # (like txn_time) drift between attempts.
+        from tools import supabase_client
+        with patch.object(supabase_client, "_request") as req:
+            req.side_effect = [
+                (200, [{"category": "Personal - Travel"}]),  # resolve_category
+                (200, "txn_20260802_003"),                   # rpc/next_txn_id
+                (201, [_txn_rec()]),                         # insert
+            ]
+            result = supabase_client.append_transaction(
+                "2026-08-02", "Gopay-Gojek", 17.60, "SGD",
+                "Personal - Travel", payment_method="DBS/POSB card ending 1234",
+                txn_time="15:22", idempotency_key="723eb8e6eefe6208",
+            )
+        assert result["idempotency_key"] == "723eb8e6eefe6208"
+        body = req.call_args_list[2].kwargs["body"][0]
+        assert body["idempotency_key"] == "723eb8e6eefe6208"
+
+    def test_malformed_or_placeholder_key_falls_back_to_compute(self):
+        # A stale Code.gs renders the template placeholder literally; an
+        # inventive model might send garbage. Anything that isn't 16
+        # lowercase hex is ignored.
+        from tools import sheets_client, supabase_client
+        for bad in ("{idempotency_key}", "not-a-key", "723EB8E6EEFE62", ""):
+            with patch.object(supabase_client, "_request") as req:
+                req.side_effect = [
+                    (200, [{"category": "Coffee"}]),  # resolve_category
+                    (200, "txn_20260728_001"),        # rpc/next_txn_id
+                    (201, [_txn_rec()]),              # insert
+                ]
+                result = supabase_client.append_transaction(
+                    "2026-04-16", "Starbucks", 5.50, "SGD", "Coffee",
+                    payment_method="DBS card ending 1234",
+                    idempotency_key=bad,
+                )
+            expected = sheets_client._compute_idempotency_key(
+                "2026-04-16", "Starbucks", 5.50, "DBS card ending 1234")
+            assert result["idempotency_key"] == expected, bad
+
+
+class TestFindNearDuplicate:
+    """The advisory net for bank double-alerts (2026-08-02: one Gojek
+    ride alerted at 15:21 and 15:22 — distinct keys by design, so hard
+    dedup can't catch the pair)."""
+
+    def _sibling(self, **over):
+        base = dict(txn_id="txn_20260802_003", date="2026-08-02",
+                    txn_time="15:21", merchant="Gopay-Gojek",
+                    amount=17.60,
+                    payment_method="DBS/POSB card ending 1234")
+        base.update(over)
+        return _txn_rec(**base)
+
+    def _run(self, rows, txn_time="15:22", **kwargs):
+        from tools import supabase_client
+        with patch.object(supabase_client, "_request") as req:
+            req.return_value = (200, rows)
+            return supabase_client.find_near_duplicate(
+                date="2026-08-02", merchant="Gopay-Gojek", amount=17.60,
+                payment_method="DBS/POSB card ending 1234",
+                txn_time=txn_time, exclude_txn_id="txn_20260802_004",
+                **kwargs)
+
+    def test_flags_sibling_within_window(self):
+        hit = self._run([self._sibling()])
+        assert hit is not None
+        assert hit["txn_id"] == "txn_20260802_003"
+
+    def test_outside_window_not_flagged(self):
+        assert self._run([self._sibling(txn_time="15:10")]) is None
+
+    def test_own_txn_id_excluded(self):
+        assert self._run([self._sibling(txn_id="txn_20260802_004")]) is None
+
+    def test_different_amount_or_card_not_flagged(self):
+        assert self._run([self._sibling(amount=17.61)]) is None
+        assert self._run(
+            [self._sibling(payment_method="UOB Card ending 5678")]) is None
+
+    def test_missing_time_still_flags(self):
+        # Advisory, not a block: a cheap false positive beats silent
+        # double-counting.
+        assert self._run([self._sibling(txn_time="")]) is not None
+        assert self._run([self._sibling()], txn_time="") is not None
+
+    def test_lookup_failure_returns_none(self):
+        from tools import supabase_client
+        with patch.object(supabase_client, "_request",
+                          side_effect=RuntimeError("supabase down")):
+            assert supabase_client.find_near_duplicate(
+                date="2026-08-02", merchant="X", amount=1.0,
+                payment_method="Y") is None
+
 
 class TestReadTransactions:
     def test_month_window_params(self):
@@ -405,6 +501,90 @@ class TestSpendingSummary:
             summary = supabase_client.get_spending_summary("2026-07")
         assert summary["Groceries"]["spent"] == 30.0
         assert "Travel - JB" not in summary
+
+
+class TestSpendingSummaryKinds:
+    """category_meta (0008): fixed bills never warn for being at 100%; they
+    surface only when OVER their usual amount. Warnings are precomputed in
+    `_attention` so the prompts render instead of deciding."""
+
+    def _run(self, txns, budgets, kinds_rows=None, trips=None):
+        from tools import supabase_client
+        with patch.object(supabase_client, "_request") as req:
+            req.side_effect = [
+                (200, txns),                        # read_transactions
+                (200, budgets),                     # read_budgets
+                (200, trips or []),                 # read_travel_mode_records
+                (200, kinds_rows or []),            # read_category_kinds
+            ]
+            return supabase_client.get_spending_summary("2026-08")
+
+    def _budgets(self):
+        return [
+            {"category": "Spotify", "month": "2026-08", "limit_amount": 12.0},
+            {"category": "iCloud", "month": "2026-08", "limit_amount": 3.98},
+            {"category": "Personal - Travel", "month": "2026-08", "limit_amount": 75.0},
+            {"category": "Groceries", "month": "2026-08", "limit_amount": 300.0},
+        ]
+
+    def test_fixed_at_100pct_is_not_a_warning(self):
+        txns = [
+            _txn_rec(id=1, category="Spotify", amount=12.0, date="2026-08-02"),
+            _txn_rec(id=2, category="iCloud", amount=3.98, date="2026-08-03"),
+            _txn_rec(id=3, category="Personal - Travel", amount=684.0,
+                     date="2026-08-13"),
+            _txn_rec(id=4, category="Groceries", amount=125.0, date="2026-08-05"),
+        ]
+        kinds = [{"category": "Spotify", "kind": "fixed"},
+                 {"category": "iCloud", "kind": "fixed"}]
+        s = self._run(txns, self._budgets(), kinds)
+        assert s["Spotify"]["kind"] == "fixed"
+        assert s["Groceries"]["kind"] == "variable"
+        att = s["_attention"]
+        assert [r["category"] for r in att["variable_over_80"]] == ["Personal - Travel"]
+        assert att["fixed_over"] == []
+        assert att["lines"] == ["🔴 Personal - Travel: $684 / $75 (912%)"]
+
+    def test_fixed_over_usual_amount_surfaces(self):
+        txns = [_txn_rec(id=1, category="Spotify", amount=12.98,
+                         date="2026-08-02")]
+        kinds = [{"category": "spotify", "kind": "fixed"}]   # case-blind
+        s = self._run(txns, self._budgets(), kinds)
+        att = s["_attention"]
+        assert att["variable_over_80"] == []
+        assert att["fixed_over"][0]["category"] == "Spotify"
+        assert att["fixed_over"][0]["over_by"] == 0.98
+        assert att["lines"][0].startswith("🧾 Spotify came in $0.98 over its usual $12.00")
+
+    def test_fixed_within_tolerance_stays_silent(self):
+        txns = [_txn_rec(id=1, category="Spotify", amount=12.50,
+                         date="2026-08-02")]
+        kinds = [{"category": "Spotify", "kind": "fixed"}]
+        s = self._run(txns, self._budgets(), kinds)
+        assert s["_attention"]["lines"] == []
+
+    def test_absent_table_means_all_variable(self):
+        # Pre-0008: category_meta read fails → {} → today's behavior.
+        from tools import supabase_client
+        txns = [_txn_rec(id=1, category="Spotify", amount=12.0, date="2026-08-02")]
+        with patch.object(supabase_client, "_request") as req:
+            req.side_effect = [
+                (200, txns),                        # read_transactions
+                (200, self._budgets()),             # read_budgets
+                (200, []),                          # read_travel_mode_records
+                RuntimeError("relation category_meta does not exist"),
+            ]
+            s = supabase_client.get_spending_summary("2026-08")
+        assert s["Spotify"]["kind"] == "variable"
+        assert s["_attention"]["lines"] == ["🔴 Spotify: $12 / $12 (100%)"]
+
+    def test_trip_category_excluded_from_variable_warnings(self):
+        txns = [_txn_rec(id=1, category="Travel", amount=400.0, date="2026-08-14")]
+        budgets = [{"category": "Travel", "month": "2026-08", "limit_amount": 0.0},
+                   {"category": "Groceries", "month": "2026-08", "limit_amount": 300.0}]
+        trips = [{"label": "JB Trip", "trip_category": "Travel"}]
+        s = self._run(txns, budgets, [], trips)
+        assert s["_attention"]["lines"] == []
 
 
 class TestReportExclusions:

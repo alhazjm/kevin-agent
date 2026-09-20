@@ -1,7 +1,7 @@
 # Statement reconciliation — the monthly ritual
 
 Repo-side tooling that diffs the DBS and UOB credit-card e-statements
-against the Supabase ledger once a month. It runs on your own machine (via
+against the Supabase ledger once a month. It runs on the owner's machine (via
 Claude Code or a plain terminal) — it is NOT a hermes tool: nothing here
 ships in the Render container, so there is no Dockerfile COPY line, no sed
 injection, no registry entry.
@@ -23,10 +23,10 @@ the ledger only through this ritual, as `source='backfill'`.
 2. Run, from the repo root:
 
    ```
-   py -V:3.11 recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
+   python recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
    ```
 
-   First run only: `py -V:3.11 -m pip install pypdf` (the sole
+   First run only: `pip install pypdf` (the sole
    dependency, imported lazily for PDF text extraction).
 
    Credentials come from the repo-root `.env` (`SUPABASE_URL`,

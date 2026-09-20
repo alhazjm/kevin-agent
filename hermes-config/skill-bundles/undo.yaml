@@ -1,0 +1,11 @@
+# /undo — reverse the last logged expense. See log.yaml for why bundles
+# exist at all (the gateway rejects unknown slash-commands since 0.20.x).
+name: undo
+description: Undo the last logged expense — "/undo"
+skills:
+  - expense-tracker
+instruction: |
+  The user wants to undo their most recent expense. Follow the
+  expense-tracker skill's undo flow exactly: preview what would be removed
+  and ask for confirmation BEFORE deleting anything. Never delete without a
+  confirmed "yes".

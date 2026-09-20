@@ -55,7 +55,7 @@ def _counts_in_totals(row: dict) -> bool:
     """M14 plus the pot rule in one predicate: agent-side monthly
     aggregates skip pending rows, backfill statement imports, and
     pot-internal YouTrip spends. The PWA hero deliberately COUNTS pending
-    and backfill (honest cash-out, Hadi 2026-07-31) — the recap explains
+    and backfill (honest cash-out, the owner 2026-07-31) — the recap explains
     the difference via `excluded_from_totals` instead of matching it."""
     return not (_is_pending(row) or _is_backfill(row) or _is_pot_internal(row))
 
@@ -90,8 +90,8 @@ MONTH_COLUMNS = {
 # Canonical Transactions tab schema (1-indexed). Used for both fixed-column
 # fallback writes and as the authoritative ordering when appending new rows.
 # The runtime layout is detected from the live header row via
-# `_get_column_index` so a sheet with an older, narrower header keeps
-# working; the nightly export rewrites it to SNAPSHOT_HEADER anyway.
+# `_get_column_index` so legacy 8-column sheets keep working until the user
+# applies the schema migration documented in supabase/migrations/0001_init.sql.
 TRANSACTION_COLUMNS = {
     "Date": 1,
     "Merchant": 2,
@@ -150,6 +150,30 @@ def get_spreadsheet():
                 raise
             time.sleep(0.5 * (2 ** attempt))
     # Defensive — loop always either returns or raises above.
+    raise last_exc  # type: ignore[misc]
+
+
+def _with_transient_retry(fn, *args, attempts: int = 4, base_delay: float = 1.0,
+                          **kwargs):
+    """Call `fn(*args, **kwargs)`, retrying transient Google 429/5xx
+    APIErrors with exponential backoff (1s, 2s, 4s by default), failing
+    fast on 4xx. The exact loop shape of get_spreadsheet, lifted into a
+    wrapper so WRITE calls get the same protection.
+
+    Why: get_spreadsheet retried the open, but the six write-side
+    round-trips in write_sheet_snapshot (worksheet lookups, clear, update)
+    were bare — one 503 at 03:00 on 2026-08-16 became a Telegram alert
+    about a Google blip the next tick would have absorbed. clear+update
+    are full overwrites (idempotent), so retrying is safe."""
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as exc:
+            last_exc = exc
+            if not _is_transient_gspread_error(exc) or attempt == attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** attempt))
     raise last_exc  # type: ignore[misc]
 
 
@@ -299,7 +323,7 @@ SNAPSHOT_HEADER = ["Date", "Merchant", "Amount", "Currency", "Category",
 def write_sheet_snapshot(transaction_rows: list[list],
                          budget_grid: list[list]) -> dict:
     """Rebuild the Transactions and Budget tabs from prepared grids — the
-    nightly export, and the only write path to the Sheet.
+    nightly export that replaced the dual-write mirror (migration PR 4).
 
     The Sheet is a read-only VIEW from this point: a human-browsable grid
     and the free-tier backup copy. Hand edits are overwritten nightly by
@@ -311,15 +335,17 @@ def write_sheet_snapshot(transaction_rows: list[list],
     """
     ss = get_spreadsheet()
 
-    ws = ss.worksheet(TRANSACTIONS_SHEET)
-    ws.clear()
-    ws.update(values=[SNAPSHOT_HEADER] + transaction_rows, range_name="A1",
-              value_input_option="USER_ENTERED")
+    # Every round-trip wrapped: a 03:00 Google blip must not surface as
+    # a failure when nothing is waiting on this export (2026-08-16).
+    ws = _with_transient_retry(ss.worksheet, TRANSACTIONS_SHEET)
+    _with_transient_retry(ws.clear)
+    _with_transient_retry(ws.update, values=[SNAPSHOT_HEADER] + transaction_rows,
+                          range_name="A1", value_input_option="USER_ENTERED")
 
-    bs = ss.worksheet(BUDGET_SHEET)
-    bs.clear()
-    bs.update(values=budget_grid, range_name="A1",
-              value_input_option="USER_ENTERED")
+    bs = _with_transient_retry(ss.worksheet, BUDGET_SHEET)
+    _with_transient_retry(bs.clear)
+    _with_transient_retry(bs.update, values=budget_grid, range_name="A1",
+                          value_input_option="USER_ENTERED")
 
     return {
         "status": "ok",
@@ -358,10 +384,11 @@ def write_year_archive(year: int, transaction_rows: list[list]) -> dict:
     except gspread.WorksheetNotFound:
         pass
 
-    ws = ss.add_worksheet(title=tab, rows=len(transaction_rows) + 1,
-                          cols=len(SNAPSHOT_HEADER))
-    ws.update(values=[SNAPSHOT_HEADER] + transaction_rows, range_name="A1",
-              value_input_option="USER_ENTERED")
+    ws = _with_transient_retry(ss.add_worksheet, title=tab,
+                               rows=len(transaction_rows) + 1,
+                               cols=len(SNAPSHOT_HEADER))
+    _with_transient_retry(ws.update, values=[SNAPSHOT_HEADER] + transaction_rows,
+                          range_name="A1", value_input_option="USER_ENTERED")
     return {
         "status": "ok",
         "tab": tab,
@@ -632,8 +659,8 @@ def link_telegram_message(txn_id: str, telegram_message_id: str) -> dict:
         return {
             "status": "error",
             "message": (
-                "Sheet has no `telegram_message_id` column — let the "
-                "nightly export rebuild the tab, or add the column by hand"
+                "Sheet has no `telegram_message_id` column — "
+                "apply the schema migration in supabase/migrations/0001_init.sql"
             ),
         }
 
@@ -909,7 +936,7 @@ def write_insight(insight: str, category: str = "general",
                   month: str | None = None) -> dict:
     """Persist a derived insight to the Insights tab.
 
-    Each insight is a short fact (e.g. "You overspent Dining by 22% in
+    Each insight is a short fact (e.g. "the owner overspent Dining by 22% in
     week 14", "Grab rides trend up on rainy weeks"). The LLM writes these
     after generating summaries; future report runs read them first.
     """

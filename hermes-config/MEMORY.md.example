@@ -1,15 +1,25 @@
 # System Memory
 
 > Tier-2 persistent memory: facts about the system, schemas, conventions, quirks.
-> Stable but editable. Loaded into the system prompt every turn.
-> Do NOT put transactions, derived insights, or session history here. Those live in the ledger, the insights table, or session FTS5 search.
+> Stable but editable. Do NOT put transactions, derived insights, or
+> session history here. Those live in the ledger, the insights table, or
+> session FTS5 search.
+>
+> **Where hermes actually reads this from (verified at hermes 0.21.0):**
+> `HERMES_HOME/memories/MEMORY.md` on the persistent disk — NOT
+> `/root/.hermes/MEMORY.md`, where the Dockerfile copies it. The image's
+> copy is never in the system prompt. To make it live, copy it onto the
+> disk once from the Render shell:
+> `cp /root/.hermes/MEMORY.md /root/.hermes/memories/MEMORY.md`.
+> Size it as if it loaded every turn regardless (keep it under ~200 lines).
 
 This is a **sanitised template** — most of it is genuinely useful as
 documentation of the system contract (schema, webhook payload, enum
 values, idempotency rules). A few illustrative examples have been
 generalised, and the card last-4s are fictional. Save as `MEMORY.md` in
-this directory for your own deployment (the Dockerfile COPYs that name);
-the schema sections should stay verbatim if you keep the same tools.
+this directory for your own deployment (the Dockerfile COPYs that name;
+the real file is gitignored, so `git add -f` it to your fork); the schema
+sections should stay verbatim if you keep the same tools.
 
 ## Episodic memory (past sessions)
 
@@ -31,11 +41,11 @@ Append-only ledger. Read paths return dicts keyed by these header names:
 | 4 | Currency | Text | Default `SGD` |
 | 5 | Category | Text | Must resolve against a `budgets` row — see the category guard below |
 | 6 | Source | Text | One of: `email`, `manual`, `backfill` |
-| 7 | Payment Method | Text | e.g. `DBS/POSB card ending 1234`, `PayLah! Wallet (Mobile ending 9876)`, `UOB Card ending 5678`, `HSBC card ending 1357`, `YouTrip Card` (Shortcut-sourced mobile-contactless taps; pot-internal — see skill) |
+| 7 | Payment Method | Text | e.g. `DBS/POSB card ending 1234`, `PayLah! Wallet (Mobile ending 9876)`, `UOB Card ending 5678`, `HSBC card ending 1357`, `YouTrip Card` (Shortcut-sourced Apple Pay taps; pot-internal — see skill) |
 | 8 | Notes | Text | Optional — but carries structured tags: `[bucket:X]`, `[trip:<label>]`, `orig: <CUR> <amt> @ <rate>`. Never strip or reorder them. |
 | 9 | txn_id | Text | Canonical key. `txn_<YYYYMMDD>_<NNN>`, minted by the atomic `next_txn_id()` RPC (legacy rows: `txn_legacy_NNN`) |
 | 10 | telegram_message_id | Text | Telegram message_id of the bot's confirmation bubble, if any |
-| 11 | idempotency_key | Text | SHA-256 (first 16 hex) of `date\|MERCHANT\|amount\|payment_method`, plus a fifth `\|time` field when a transaction time exists |
+| 11 | idempotency_key | Text | SHA-256 (first 16 hex) of `date|MERCHANT|amount|payment_method`, plus a fifth `|time` field when a transaction time exists |
 
 `txn_id` is the primary key for `edit_expense` and `delete_expense`. Always prefer it over merchant+amount lookup; the fallback exists only for legacy rows.
 
@@ -63,23 +73,26 @@ Sent by `apps-script/Code.gs` via the `expense-ingest` route in `hermes-config/c
   "type": "paylah" | "card" | "applepay",
   "amount": 25.00,
   "currency": "SGD",
-  "merchant": "COLD STORAGE JELITA",
+  "merchant": "GREENFIELD COMMUNITY FUND",
   "date": "2026-04-15",
   "card_last_four": "1234" | null,
   "payment_method": "DBS/POSB card ending 1234",
   "source": "email",
   "raw_from": "alerts@dbs.com",
-  "email_date": "2026-04-15T05:10:00.000Z"
+  "email_date": "2026-04-15T05:10:00.000Z",
+  "idempotency_key": "723eb8e6eefe6208",
+  "notes": ""
 }
 ```
 
-Non-SGD amounts are FX-converted to SGD by the Apps Script (frankfurter.app) before sending; the payload then also carries a `notes` field with the `orig: <CUR> <amt> @ <rate>` trace.
+Non-SGD amounts are FX-converted to SGD by the Apps Script (frankfurter.dev, ECB rates) before sending; `notes` then carries the `orig: <CUR> <amt> @ <rate>` trace (empty string otherwise — the field is always present). The route renders it as the `Notes:` line; pass it to `log_expense` verbatim. `idempotency_key` is computed by the Apps Script at parse time — pass it to `log_expense` VERBATIM (never invent one; omit when absent) so a retried webhook dedupes regardless of how other arguments are reassembled.
 
 ## Quirks & rules
 
-- **Always-ask merchants**: Shopee, Lazada, Amazon. They sell everything; never auto-categorise. Even if `merchant_map` has a hit, just ask me.
-- **Foreign currency**: arrives pre-converted to SGD with the original in `notes`. If the user manually reports a foreign-currency transaction, store the SGD-equivalent in `Amount` and put the original currency + amount in `Notes` the same way.
-- **Backfilled rows** (`source = "backfill"`) are statement imports (e.g. a supplementary card whose alerts never reach this inbox, brought in monthly via the local statement-recon workflow — there is no runtime backfill tool). Exclude them from subscription-creep detection and other analytics.
+- **Multi-category merchants** (Shopee, Lazada, Amazon, supermarkets, 7-Eleven): log straight to the default category with ONE bubble and let me correct by replying — never two bubbles, and never learn a `merchant_map` entry for them.
+- **Foreign currency**: bank emails arrive pre-converted to SGD with the original in `notes` (`orig: …`). Manual foreign amounts ("rm33", "฿200") are converted IN THE TOOL: pass `amount` and `currency` exactly as the user gave them to `log_expense` / `log_expense_pending` and do NOT convert yourself — the tool converts via frankfurter, stamps the same `orig: <CUR> <amt> @ <rate> (frankfurter <date>)` trace, and returns `status=error, reason=fx_failed` (nothing logged) if the rate lookup fails, in which case ask for the SGD amount.
+- **Trip routing is the tool's job**: during an active trip, `log_expense` itself routes YouTrip payments and FX-converted (`orig:`) spends into the trip category with a `[bucket:X]` derived from the HOME category you proposed, and reports it as `trip_routed`. Always propose the HOME category as usual; never pick the trip category yourself. SGD spends with no signal stay home. Manual foreign entries ("rm33") mean CASH unless the user names YouTrip — no payment method, converted to SGD, routed to the trip, counted in the month; pass `payment_method="YouTrip Card"` only when they say so (then it's pot-internal).
+- **Backfilled rows** (`source = "backfill"`) are statement imports (Sam's supplementary card, brought in monthly via the local statement-recon workflow — there is no runtime backfill tool). Exclude them from subscription-creep detection and other analytics.
 - **`source` values**: only `email`, `manual`, or `backfill`. Do not invent new ones.
 - **New categories are opt-in**: when `log_expense` returns `new_category_created: true` (possible only because the user named the category), follow up by asking if they want to set a monthly limit.
 

@@ -1,0 +1,23 @@
+# /log — manual expense entry from Telegram.
+#
+# Why this file exists (2026-09-04, hermes 0.20.6): the gateway now rejects
+# any slash-command it does not recognise with "Unknown command /log" instead
+# of forwarding it to the model as text, and there is no config switch for
+# that. A skill BUNDLE named `log` registers `/log` natively: the gateway
+# checks bundles first, injects every listed skill's full body plus the text
+# the user typed after the command, then runs the normal agent turn. This is
+# what "/log $30 IKEA" did implicitly at the old pin — the model loaded
+# expense-tracker itself — made explicit.
+#
+# Ships via `COPY hermes-config/skill-bundles/ /root/.hermes/skill-bundles/`
+# in the Dockerfile (AGENTS.md M1). The `name:` becomes the slash command.
+name: log
+description: Log an expense by hand — "/log $30 IKEA lunch"
+skills:
+  - expense-tracker
+instruction: |
+  The user is logging an expense MANUALLY from Telegram. The text after the
+  command is the entry (amount, merchant, optional note). Follow the
+  expense-tracker skill's manual "/log" flow exactly and call log_expense
+  with source="manual". When the result shows bubble_sent: true, produce an
+  EMPTY assistant reply — the tool already sent the confirmation bubble.

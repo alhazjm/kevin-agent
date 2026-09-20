@@ -3,7 +3,7 @@
 -- the agent ("that $50 PayLah to Sarah was a loan"); repayment flips
 -- status to 'repaid' and the agent logs an offsetting NEGATIVE
 -- transactions row (category "Lending") so monthly totals self-correct —
--- Hadi chose the offset-txn design explicitly over excluding Lending from
+-- the owner chose the offset-txn design explicitly over excluding Lending from
 -- reports. txn_id links the outflow ledger row ('' for cash loans with no
 -- bank alert); repay_txn_id links the negative offset row once repaid.
 --

@@ -20,10 +20,20 @@ Architecture (see PR description for full design):
   `[bucket:X]` (e.g. `[bucket:food] warung kopi`). This lets us compute
   per-bucket spend without adding a column to the transactions ledger.
 
-- Activation rule (LLM-orchestrated via the skill): travel_mode row covers
-  today's date AND original currency was non-SGD AND MerchantMap returns
-  no match → use the trip's budget category, ask the LLM to pick a bucket,
-  stamp `[bucket:X]` in notes.
+- Routing rule (DETERMINISTIC, decided by `route_for_trip` inside
+  `log_expense` — the model no longer routes; 2026-08-17): when a
+  travel_mode row covers the txn date, a spend is routed into the trip's
+  budget category on one of two signals — payment_method mentions YouTrip
+  (Shortcut taps), or notes carry an `orig:` FX trace (bank card used
+  abroad, or a manual foreign amount the tool converted first). The
+  bucket is derived from the model's PROPOSED home category via a keyword
+  map and stamped as `[bucket:X]`. MerchantMap decides the BUCKET, never
+  the category — the old "a learned mapping beats travel mode" rule sent
+  Gojek-in-KL to the home Personal - Travel budget (912%). SGD spends
+  with no signal (Shopee for home, PayLah to a friend) are NOT routed —
+  currency/pot is the guard against "everything during the trip is
+  travel", not the date. YouTrip top-ups and rows already in the trip
+  category are never routed.
 
 - Auto-nudge: after a trip txn is logged, `maybe_send_trip_bucket_nudge`
   checks whether it crossed an 80%/100% bucket threshold and fires a
@@ -261,6 +271,153 @@ def _apply_trip_tag(notes: str, label: str) -> str:
     return f"[trip:{label}]"
 
 
+# --- Deterministic trip routing (called from handle_log_expense) ------------
+
+# The transfer category is never routed into a trip: a YouTrip top-up is
+# the counted outflow (it gets a `[trip:<label>]` tag via
+# `link_topup_to_trip` instead). Matched case-insensitively on the
+# canonical name.
+TRANSFER_CATEGORY = "YouTrip Top-up"
+
+# Keyword map from the model's PROPOSED home category to a trip bucket.
+# Order matters: the first group with a hit wins ("Personal - Travel" →
+# transport, "Personal - Food & Drinks" → food). Anything unmatched falls
+# to DEFAULT_BUCKET ("misc"). Keep in sync with the bucket names users
+# put in `travel_mode.budget_map`.
+_BUCKET_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("food", ("food", "drink", "dining", "grocer")),
+    ("transport", ("travel", "transport", "taxi", "grab", "bus")),
+    ("shopping", ("cloth", "shop", "misc", "beauty", "gift")),
+    ("health", ("health", "medical", "dental", "pharm")),
+    ("lodging", ("hotel", "lodg", "accom", "stay")),
+]
+
+
+def _bucket_for_category(proposed: str) -> str:
+    """Derive a trip bucket from a proposed HOME category name (keyword
+    match, case-insensitive). Unknown → DEFAULT_BUCKET."""
+    name = (proposed or "").strip().lower()
+    if not name:
+        return DEFAULT_BUCKET
+    for bucket, keywords in _BUCKET_KEYWORDS:
+        if any(k in name for k in keywords):
+            return bucket
+    return DEFAULT_BUCKET
+
+
+def route_for_trip(txn_date: str, proposed_category: str,
+                   payment_method: str = "", notes: str = "",
+                   currency: str = "SGD") -> dict:
+    """Decide (deterministically) whether a spend belongs to the active
+    trip and, if so, what category + notes it should land with.
+
+    Called by `handle_log_expense` BEFORE `append_transaction`, with the
+    already-FX-converted values (a manual foreign amount is converted to
+    SGD in the tool first, which stamps `orig:` and thereby raises the
+    signal). Pure logic over `get_active_travel_mode(as_of=txn_date)`;
+    NEVER raises — every path returns a dict:
+
+      {"applied": bool, "reason": str, "category": <final>,
+       "notes": <final, [bucket:X] via _apply_bucket_tag>,
+       "trip_label": str, "bucket": str | None,
+       "signal": "youtrip" | "orig" | None, "from_category": str}
+
+    Signals (either is sufficient once a trip covers `txn_date`):
+      - "youtrip": payment_method mentions YouTrip (Shortcut taps; the
+        spend is pot-internal — excluded from monthly totals as before).
+      - "orig": notes carry an `orig:` FX trace (bank card abroad, or a
+        tool-converted manual amount). A non-SGD `currency` that somehow
+        reached here unconverted counts as the same signal.
+    Guards (never routed): no active trip; proposed category is the
+    transfer category (top-ups get `[trip:]` tags instead); proposed
+    already equals the trip category ("already_trip"); no signal (SGD,
+    no orig, not YouTrip — a Shopee order for home mid-trip stays home).
+
+    Bucket = an existing `[bucket:X]` in notes (respected, notes left
+    untouched) else `_bucket_for_category(proposed_category)` — so a
+    MerchantMap hit now decides the BUCKET, never the category."""
+    proposed = (proposed_category or "").strip()
+    base = {
+        "applied": False,
+        "reason": "",
+        "category": proposed,
+        "notes": notes or "",
+        "trip_label": "",
+        "bucket": None,
+        "signal": None,
+        "from_category": proposed,
+    }
+    try:
+        trip = get_active_travel_mode(as_of=txn_date)
+        if not trip.get("active"):
+            return dict(base, reason="no_active_trip")
+        trip_category = str(trip.get("trip_category", "")).strip()
+        label = str(trip.get("label", ""))
+        base["trip_label"] = label
+        if not trip_category:
+            return dict(base, reason="trip_has_no_category")
+        if proposed.lower() == TRANSFER_CATEGORY.lower():
+            return dict(base, reason="topup_guard")
+        if proposed.lower() == trip_category.lower():
+            return dict(base, reason="already_trip")
+
+        pm = (payment_method or "").lower()
+        notes_l = (notes or "").lower()
+        cur = (currency or "SGD").strip().upper()
+        if "youtrip" in pm:
+            signal = "youtrip"
+        elif "orig:" in notes_l or (cur and cur != "SGD"):
+            signal = "orig"
+        else:
+            return dict(base, reason="no_signal")
+
+        # Fixed monthly bills are never trip spend, even when billed in a
+        # foreign currency mid-trip (Anthropic/ChatGPT/iCloud arrive in USD
+        # with an orig: trace on the DBS card): the proposed category's
+        # `kind` from category_meta (0008) is the opt-out. Adversarial
+        # review catch, 2026-08-17 — without it a correction could never
+        # stick, because the router re-routed the same merchant next trip.
+        try:
+            kinds = supabase_client.read_category_kinds()
+        except Exception:
+            kinds = {}
+        if kinds.get(supabase_client._normalize_category(proposed)) == "fixed":
+            return dict(base, reason="fixed_bill")
+
+        # The trip category must be a real budgets row, or every routed
+        # spend would be refused with unknown_category and NOTHING logged
+        # (the pending UNCATEGORIZED fallback is bypassed by routing). Fall
+        # back to the home category rather than lose the transaction;
+        # create_trip ensures the row exists for new trips.
+        try:
+            resolved = supabase_client.resolve_category(trip_category)
+        except Exception:
+            resolved = {"match": None}
+        if not resolved.get("match"):
+            return dict(base, reason="trip_category_unknown")
+        trip_category = resolved["match"]
+
+        existing = _parse_bucket_from_notes(notes or "")
+        if existing:
+            bucket = existing
+            new_notes = notes or ""
+        else:
+            bucket = _bucket_for_category(proposed)
+            new_notes = _apply_bucket_tag(notes or "", bucket)
+
+        return dict(
+            base,
+            applied=True,
+            reason="routed",
+            category=trip_category,
+            notes=new_notes,
+            bucket=bucket,
+            signal=signal,
+        )
+    except Exception as exc:
+        return dict(base, reason="exception", error=str(exc))
+
+
 # --- Trip-budget status -----------------------------------------------------
 
 
@@ -305,9 +462,9 @@ def get_trip_budget_status(trip_label: str | None = None,
         return {
             "status": "no_travel_mode_tab",
             "message": (
-                "No trips defined — the `travel_mode` table is empty. "
-                "Create one with the create_trip tool, or insert a row "
-                "directly."
+                "No trips defined — the `travel_mode` table is empty. Add a "
+                "trip row before asking for trip status — see "
+                "`supabase/migrations/0001_init.sql`."
             ),
         }
 
@@ -502,6 +659,14 @@ def create_trip(label: str, start_date: str, end_date: str,
         total_budget=_as_float(total_budget),
         notes=str(notes or ""),
     )
+    # One budgets row per trip is the design ("so existing budget
+    # machinery works unchanged") — and route_for_trip refuses to route
+    # into a category that doesn't resolve. Ensure it at $0 here, exactly
+    # like the reserved Lending row; the user sets a limit conversationally.
+    try:
+        supabase_client.ensure_category_exists(trip_category)
+    except Exception:
+        pass   # a later log_expense simply won't route until the row exists
     return {
         "status": "created",
         "trip": {

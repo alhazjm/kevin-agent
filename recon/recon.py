@@ -3,7 +3,7 @@
 
 Usage (from the repo root, statements dropped into samples/ — untracked):
 
-    py -V:3.11 recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
+    python recon/recon.py samples/DBS-estatement.pdf samples/UOB-estatement.pdf
 
 Parses each PDF with recon/statement_parsers.py (checksum-gated: a
 statement that cannot prove its printed totals aborts the run), fetches
@@ -326,7 +326,7 @@ def render_report(statements: list[Statement], diff: dict) -> str:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        print("usage: py -V:3.11 recon/recon.py <statement.pdf> "
+        print("usage: python recon/recon.py <statement.pdf> "
               "[<statement.pdf> ...]")
         return 2
 

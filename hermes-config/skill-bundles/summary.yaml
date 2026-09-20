@@ -1,0 +1,12 @@
+# /summary — on-demand spending summary. See log.yaml for why bundles exist
+# at all (the gateway rejects unknown slash-commands since 0.20.x).
+name: summary
+description: Spending summary on demand — "/summary" or "/summary last month"
+skills:
+  - weekly-summary
+instruction: |
+  The user asked for a spending summary from Telegram. Text after the
+  command names the period ("this week", "last month", "August"); with no
+  text, summarise the current week to date. Follow the weekly-summary
+  skill's format. Telegram formatting only: short lines, no markdown tables
+  or headers.
