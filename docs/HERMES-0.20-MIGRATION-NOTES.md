@@ -454,7 +454,7 @@ Done before merge:
 - [x] Every disabled aux key path confirmed to exist with default `True`.
 - [x] `bash -n cron/setup-cron-jobs.sh` clean; no comment lines inside
       Dockerfile `RUN` continuations.
-- [x] `pytest tests/ -q` → **626 passing** at the time (648 in this repo now), unchanged (no `tools/*.py` touched).
+- [x] `pytest tests/ -q` → **626 passing** at the time (654 in this repo now), unchanged (no `tools/*.py` touched).
 
 Still to do on the running container (the build is the first real gate):
 

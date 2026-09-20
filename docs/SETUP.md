@@ -100,9 +100,26 @@ have no backup export; nothing else changes.
 
 ## 0. Before your first build
 
-**Fork or push this repo to your own GitHub account.** Render needs a repo
-it can read, and you will be committing edits (hardcoded emails, URLs, card
-ids) that you do not want to send upstream.
+**Make your own PRIVATE copy of this repo. Do not use the Fork button.**
+Render needs a repo it can read, and you will be committing edits (your
+email, URLs, card ids) and, a few lines below, memory files that carry your
+name, your household and your card last-4s. A GitHub fork of a public repo
+is always public and cannot be made private, so clone and push to a new
+private repository instead:
+
+```bash
+git clone https://github.com/alhazjm/kevin-agent.git my-kevin
+cd my-kevin
+git remote rename origin upstream        # keeps a way to pull future updates
+# On github.com: New repository → name it → Private → create it EMPTY
+git remote add origin https://github.com/<you>/my-kevin.git
+git push -u origin main
+```
+
+With the GitHub CLI the last two steps are one line:
+`gh repo create my-kevin --private --source=. --remote=origin --push`.
+Render builds private repositories once you grant its GitHub app access to
+that one repo. The rest of this guide says "your fork" for this copy.
 
 **Create the three memory files.** They ship as templates, because the real
 ones carry a name, a household, card last-4s and goals. The Dockerfile COPYs
@@ -132,9 +149,11 @@ git add -f hermes-config/USER.md hermes-config/MEMORY.md hermes-config/SOUL.md
 git commit -m "Add my memory files"
 ```
 
-If you would rather not carry personal details in a fork's history, the
-alternative is to delete the three `hermes-config/*.md` lines from
-`.gitignore` in your fork — simpler mental model, but you lose the guard.
+If you would rather not depend on remembering `-f`, the alternative is to
+delete the three `hermes-config/*.md` lines from `.gitignore` in your fork —
+simpler mental model, but you lose the guard against committing them
+somewhere public by accident. Either way the files end up in your
+repository's history, which is why that repository has to be private.
 
 > One honest caveat, discovered during the 0.21 upgrade: hermes reads
 > `USER.md` and `MEMORY.md` from `HERMES_HOME/memories/`, which `start.sh`
@@ -144,7 +163,7 @@ alternative is to delete the three `hermes-config/*.md` lines from
 > The shipped Dockerfile leaves this as-is because fixing it changes agent
 > behaviour; it is on the changelog as known-and-not-fixed.
 
-**Verify:** `pytest tests/ -q` → **648 passed**, in a couple of seconds,
+**Verify:** `pytest tests/ -q` → **654 passed**, in a couple of seconds,
 with no network.
 
 ---

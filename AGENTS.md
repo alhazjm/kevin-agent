@@ -11,6 +11,128 @@ guessing. When this file and your instinct disagree, this file wins.
 > file, because Claude Code looks for that name — there is nothing to keep
 > in sync.
 
+## Start here: which job are you doing?
+
+**A. The person wants their own Kevin running** ("help me set this up",
+"walk me through the deploy", "I just cloned this"). Use the next section
+and [`docs/SETUP.md`](docs/SETUP.md). You do not need the rest of this
+manual for that job, and you should not be changing code beyond the
+hardcoded values SETUP names.
+
+**B. You are changing this repo** (a new tool, a parser for another bank, a
+bug fix, a skill edit, a hermes-agent bump). Skip to "What this repo is" and
+read on; the failure catalogue and the checklists are for you.
+
+Setup often turns into B ("my bank is OCBC"). When it does, get the base
+install working first (chat logging needs no parser), then switch to B and
+use the `/new-alert-source` checklist in `.claude/skills/`.
+
+## Walking someone through first-time setup
+
+[`docs/SETUP.md`](docs/SETUP.md) is the source of truth for every step,
+value and UI path. This section is only how to run the walkthrough. Read
+SETUP.md in full before your first instruction (sections 0 to 7 are the base
+install; 8 and 9 are optional) and quote it rather than reconstructing steps
+from memory. Where SETUP.md and your own knowledge of Supabase, Render or
+Telegram disagree, SETUP.md describes what this repo needs. If a dashboard
+label has visibly changed since it was written, say so and describe what to
+look for instead.
+
+**Open with four questions, then give the plan.**
+
+1. Which banks or cards send you transaction alert emails? (Parsers exist
+   for DBS/POSB, UOB, HSBC and a self-sent YouTrip Shortcut. Anything else
+   starts chat-only; a parser can come later.)
+2. Do you want email auto-logging now, or chat logging first? (Chat-only
+   skips SETUP section 5 entirely and is a fine first day.)
+3. What machine are you on, and do you have git and Python 3.11? (Node and
+   `clasp` are only for pushing the Apps Script from the command line;
+   pasting it into the editor works too.)
+4. Which of these accounts do you already have: GitHub, Supabase, Telegram,
+   OpenAI, Render?
+
+Then state the route in one short list (the sections you will do, in order,
+and the ones you are skipping) and the honest time estimate: an afternoon.
+
+**One section at a time.** Follow SETUP's order, 0 through 6, then the
+verification ladder in section 7. Give the steps for one section, wait for
+the person to say it is done, check it, then move on. Never dump several
+sections at once. Keep a running checklist in the conversation so either of
+you can see where you are; if the session might end first, write it to
+`notes/setup-progress.md` (the `notes/` folder is gitignored).
+
+**Check every step before the next.** Each stage has a cheap proof. After
+section 0, `pytest tests/ -q` passes. After section 1, the tables exist
+(`select count(*) from budgets;` runs in the SQL editor). After section 3,
+the deploy log shows the `start.sh` lines SETUP lists and the bot answers
+"hi". Then SETUP section 7, in its order, is the acceptance test. When
+something fails, go to SETUP's Troubleshooting table before theorising; most
+first-run failures are already rows in it.
+
+**What you can do in the checkout** (offer, then do it):
+
+- set up the remotes for their private copy and run the tests;
+- create `hermes-config/USER.md`, `MEMORY.md` and `SOUL.md` from the
+  `.example` templates by interviewing the person (people, payment methods,
+  tone), then `git add -f` them. They are gitignored on purpose: a plain
+  `git add` silently skips them, and the Docker build then fails at `COPY`;
+- edit the values SETUP lists under "What you will need to change because it
+  is hardcoded": the owner email in `supabase/migrations/0001_init.sql`
+  (then regenerate the one-paste file with `python supabase/build_schema.py`,
+  so `schema.sql` and the test that pins it stay in step), `WEBHOOK_URL` and
+  `RENDER_SERVICE_ID` in `apps-script/Code.gs`, and the Supabase URL and
+  publishable-key placeholders in `pwa/index.html` and `pwa/budget.html`;
+- generate the webhook secret (`openssl rand -hex 32`, or
+  `python -c "import secrets; print(secrets.token_hex(32))"`) for them to
+  paste into Render and the Script Properties;
+- commit and push to THEIR repository, never to `alhazjm/kevin-agent`.
+
+**What only the person can do** (give click-level directions, then wait):
+create accounts; talk to @BotFather; paste SQL into the Supabase SQL editor;
+create the Render service, its disk and its environment variables; create the
+Apps Script project, set its Script Properties, run `setupTrigger()` and
+approve the Google permission prompt; sign in to the dashboard by email OTP.
+
+**Secrets.** You never need to see one. Tokens and keys go straight from the
+provider's page into Render's environment variables or the Apps Script's
+Script Properties. Do not ask the person to paste a secret into the chat, do
+not write one into any tracked file, and if one lands in a commit, tell them
+to rotate it rather than trying to scrub history. The dashboard holds only
+the PUBLIC publishable key; the service key must never appear under `pwa/`.
+
+**Their copy must be private.** SETUP section 0 has them commit memory files
+that carry a name, a household and card last-4s. A GitHub fork of a public
+repository is always public, so do not let them use the Fork button: clone,
+create an empty PRIVATE repository, and push there (SETUP section 0 has the
+commands). Check this before the first `git push`.
+
+**Rules from the rest of this manual that bite during setup.**
+
+- If the Docker build fails on a patch anchor or a grep, stop and report it.
+  Never loosen an anchor to get a build through (M3).
+- `__WEBHOOK_SECRET_PLACEHOLDER__` and `__OPENAI_KEY_PLACEHOLDER__` in
+  `cli-config.yaml` are load-bearing; `start.sh` fills them at boot (M4).
+- Cron times are wall-clock in the container's `TZ`. For another timezone
+  change `ENV TZ` in the Dockerfile; do not convert the cron expressions
+  (M5).
+- `supabase/migrations/` is append-only and the schema is applied by hand in
+  the SQL editor. Nothing in this repo migrates a database for you.
+- The Apps Script's `SUPABASE_SERVICE_KEY` is the LEGACY `service_role` JWT
+  (`eyJ…`), not an `sb_secret_…` key. The wrong one fails silently.
+
+**Not in Singapore, or not on these banks?** Say it early and plainly. The
+parsers are regexes for specific DBS, UOB and HSBC email layouts, and the
+home currency is SGD in code (`_fx_to_sgd`, the schema default, `TZ`). Chat
+logging, budgets, IOUs and the dashboard work anywhere; email ingest needs a
+parser for their bank (job B), and a different home currency is a code
+change. SETUP's "Swapping the pieces" costs each of these out honestly.
+
+**Done means** SETUP section 7 passes through step 6 for a chat-only install,
+or through step 8 with email ingest, and the test transaction has been
+undone. Then offer the optional parts (their cards, the Sheet backup) and
+point at [`docs/UPGRADING-HERMES.md`](docs/UPGRADING-HERMES.md) for keeping
+the framework current.
+
 ## What this repo is
 
 > **"PEHD"** — you will see it in the env var `PEHD_LLM_USAGE_DIR`, the
@@ -130,7 +252,7 @@ pwa/                           # Static PWA dashboard (separate Render Static Si
 recon/                         # Local statement-recon CLI (pypdf, checksum-gated parsers) — never ships
 scripts/                       # setup-google-oauth.sh (optional Sheet backup), summarize_llm_usage.py
 samples/                       # GITIGNORED — real e-statement PDFs live here, never committed
-tests/                         # 648 tests across 10 files; see "Testing"
+tests/                         # 654 tests across 11 files; see "Testing"
 LICENSE                        # MIT
 CHANGELOG.md                   # Dated, human-readable
 .github/workflows/             # ci.yml (pytest + scrub gate) and anchor-check.yml (weekly upstream test)
@@ -858,14 +980,16 @@ pytest tests/test_travel_mode.py              # one file
 pytest tests/ -k "idempotency"                # by keyword
 ```
 
-Current count: **648 passing** across ten files:
+Current count: **654 passing** across eleven files:
 `test_expense_sheets_tool` (also covers `sheets_client`),
 `test_supabase_client`, `test_card_optimiser`, `test_travel_mode`,
 `test_loans`, `test_email_parser` (the Apps Script mirror, M16),
 `test_statement_recon`, `test_skill_bundles` (the slash-command bundles:
 every listed skill exists, the Dockerfile ships the dir),
-`test_sheets_optional` (Google Sheets stays optional) and
-`test_schema_consolidation` (`schema.sql` matches the migrations). State the new total in every PR body; CI runs the same suite on every push.
+`test_sheets_optional` (Google Sheets stays optional),
+`test_schema_consolidation` (`schema.sql` matches the migrations) and
+`test_docs` (Mermaid blocks render, relative links and heading anchors
+resolve, the README stays short). State the new total in every PR body; CI runs the same suite on every push.
 
 ## Checklists
 
