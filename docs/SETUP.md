@@ -24,7 +24,7 @@ which is the section that will actually cost you time if you skip it.
 | **GitHub** | github.com | Render builds from a repo you control; CI runs your tests | Free |
 | **Supabase** | supabase.com → New project | The ledger (Postgres) and the dashboard's sign-in | Free tier is plenty |
 | **Telegram** | The app, then message **@BotFather** | The bot you talk to | Free |
-| **OpenAI** | platform.openai.com → API keys | The model (`gpt-5.4-nano`) and voice-note transcription | Usage-based; a few dollars a month at personal volume. **A brand-new account is on Tier 1** (200k tokens/min) — enough for one person, see [Rate limits](#rate-limits) |
+| **OpenAI** | platform.openai.com → API keys | The model (`gpt-5.4-nano`) and voice-note transcription | Usage-based; a few dollars a month at personal volume. **Set up billing first** (a payment method or prepaid credit): a key on an unfunded account answers every call with 429 `insufficient_quota`, and the bot simply never replies. **A brand-new account is on Tier 1** (200k tokens/min) — enough for one person, see [Rate limits](#rate-limits) |
 | **Render** | render.com | Runs the agent (Docker web service + 1 GB disk) and hosts the dashboard (static site) | **~$7/mo** for the always-on service; the static site is free |
 
 Required only if you want bank emails ingested automatically (skip it and
@@ -147,7 +147,11 @@ Dockerfile COPYs the real filenames, so without this the build fails at
 ```bash
 git add -f hermes-config/USER.md hermes-config/MEMORY.md hermes-config/SOUL.md
 git commit -m "Add my memory files"
+git push
 ```
+
+Push before you create the Render service in section 3: Render builds what
+is on GitHub, not what is on your laptop.
 
 If you would rather not depend on remembering `-f`, the alternative is to
 delete the three `hermes-config/*.md` lines from `.gitignore` in your fork —
@@ -163,7 +167,7 @@ repository's history, which is why that repository has to be private.
 > The shipped Dockerfile leaves this as-is because fixing it changes agent
 > behaviour; it is on the changelog as known-and-not-fixed.
 
-**Verify:** `pytest tests/ -q` → **654 passed**, in a couple of seconds,
+**Verify:** `pytest tests/ -q` → **657 passed**, in a couple of seconds,
 with no network.
 
 ---
@@ -182,7 +186,7 @@ Render's). From Project Settings → API collect three things:
 | Secret / service_role key | `sb_secret_...` — **and** the legacy `service_role` JWT (`eyJ…`) under *Legacy API keys* | Render (`SUPABASE_SERVICE_KEY`, either form) and Apps Script (**legacy JWT only**, see 5.4) — server side only |
 
 The secret key bypasses row-level security completely. It must never appear
-in `pwa/*.html`, and those files carry a comment saying so.
+in `pwa/*.html`; `pwa/index.html` carries a comment saying so.
 
 ### 1.2 Change the owner email BEFORE running the SQL
 
@@ -198,8 +202,12 @@ $$;
 Replace that literal with the email address you will sign into the PWA
 with. Every RLS policy calls `is_owner()`, so this one line decides whether
 the PWA can read anything at all. `supabase/schema.sql` contains the same
-function — change it there too if you paste that file (its header reminds
-you).
+function, because it is generated from the migrations: after editing
+`0001_init.sql`, regenerate it with `python supabase/build_schema.py` and
+paste the result. (No Python to hand? Make the identical one-line change in
+`schema.sql` yourself. It is the one hand edit that file tolerates, because
+the result is byte-for-byte what the generator writes, so the test that pins
+it still passes.)
 
 If you forget: the PWA will let you sign in and then render an empty
 dashboard with no error, because RLS returns zero rows rather than a
@@ -254,9 +262,13 @@ building a new one — run only the ones you have not run yet, in order:
 There is deliberately no seed file for `cards` / `card_strategy` — those
 rows describe whichever cards you actually carry (1.4).
 
-All of them are re-runnable (`create table if not exists`, policies via the
-idempotent `do $$ … duplicate_object` pattern), so running `schema.sql`
-over a database that already has some of them is safe. Migrations are
+`0002` onward are re-runnable (`create table if not exists`, `add column if
+not exists`, policies via the idempotent `do $$ … duplicate_object`
+pattern). `0001` is not: its `owner_read` loop is a bare `create policy`, so
+a second run stops at "policy … already exists". That failure rolls the
+whole paste back and changes nothing, but it means `schema.sql` is for a
+FRESH project; on a database that already exists, run only the numbered
+files you have not run yet. Migrations are
 append-only: never edit one that has already run, and never edit
 `schema.sql` by hand — a new schema change is a new numbered file plus a
 regenerate, in the same commit.
@@ -272,16 +284,25 @@ means the feature is quiet rather than broken.
 
 ### 1.4 Seed the tables that are hand-maintained
 
-**Budgets.** The PWA's `budget.html` is the intended editor once you are
-signed in. To bootstrap before then, insert directly — one row per category
-per month, `YYYY-MM`:
+**Budgets — do this now; the rest of the guide assumes it.** The agent only
+logs into categories that have a budgets row, and "what's my remaining
+budget?" reads the rows for the CURRENT month, so with an empty table the
+test expense in section 7 has nowhere to go and the budget answer is blank.
+The PWA's `budget.html` is the intended editor once you are signed in; to
+bootstrap before then, insert directly — one row per category, for this
+month (`YYYY-MM`):
 
 ```sql
-insert into budgets (category, month, limit_amount) values
-  ('Groceries',              '2026-09', 400),
-  ('Personal - Food & Drinks','2026-09', 300),
-  ('Transport',              '2026-09', 120),
-  ('Subscriptions',          '2026-09',  45);
+insert into budgets (category, month, limit_amount)
+select category,
+       to_char(now() at time zone 'Asia/Singapore', 'YYYY-MM'),  -- your timezone
+       limit_amount
+from (values
+  ('Groceries',                400),
+  ('Personal - Food & Drinks', 300),
+  ('Transport',                120),
+  ('Subscriptions',             45)
+) as seed(category, limit_amount);
 ```
 
 Category names are yours to choose; the agent only ever logs into
@@ -440,6 +461,20 @@ requirements you have not met; none are in this config's toolsets. What
 matters is that there is **no** such line about the expense tools and no
 "Unknown toolset".
 
+**Then make `USER.md` and `MEMORY.md` live — once per disk.** hermes reads
+those two from the persistent disk, not from where the image copies them
+(the caveat in section 0), so until you do this the agent knows nothing you
+wrote in them. In the Render shell:
+
+```bash
+cp /root/.hermes/USER.md   /root/.hermes/memories/USER.md
+cp /root/.hermes/MEMORY.md /root/.hermes/memories/MEMORY.md
+```
+
+Do it once. After that the disk copy is the live one and the agent may have
+added to it, so if you later change the repo copy, merge by hand instead of
+copying over it.
+
 ---
 
 ## 4. The PWA
@@ -519,12 +554,9 @@ clasp push
 ```
 
 Or: script.google.com → New project → paste `Code.gs`, and paste
-`appsscript.json` over the manifest (View → Show manifest file).
-
-`clasp create` in a directory that already has a manifest can pull the new
-project's default `appsscript.json` over the committed one (timezone and
-scopes). If `git status` shows it modified after `clasp create`, run
-`git checkout apps-script/appsscript.json` before `clasp push`.
+`appsscript.json` over the manifest (Project Settings ⚙ → tick "Show
+`appsscript.json` manifest file in editor"). Either way, make the two edits
+in 5.2 before you run anything; with `clasp`, edit locally and push again.
 
 `clasp create` in a directory that already has a manifest can pull the new
 project's default `appsscript.json` over the committed one (timezone and
@@ -583,7 +615,13 @@ Project Settings (gear icon) → Script Properties. All but `RENDER_API_KEY` are
 ### 5.5 Triggers
 
 In the editor, run these functions once each (Run ▶ with the function
-selected; grant the consent prompts for your own script):
+selected; grant the consent prompts for your own script). The consent screen
+lists what `appsscript.json` asks for: read and modify Gmail (find the
+alerts, mark them read), connect to an external service (your webhook,
+Supabase, Telegram, the FX rate), manage this script's own triggers, and
+Google Sheets. The Sheets scope is only exercised if you set `SPREADSHEET_ID`
+as the audit fallback in 5.4; if you never will, delete that line from the
+manifest and the prompt stops asking for it. The functions:
 
 - `setupTrigger()` — checks Gmail every 5 minutes. Required.
 - `setupRestartTrigger()` — restarts the Render service at ~04:00 daily.
@@ -591,7 +629,9 @@ selected; grant the consent prompts for your own script):
   512 MB Starter cap over days.
 
 Then enable transaction alert emails in your bank's app, or the pipeline
-has no input.
+has no input. Set the alert threshold as low as the bank allows: a bank that
+only emails above a minimum amount hides every smaller purchase from the
+ledger.
 
 **Verify:** run `debugAudit()` from the editor — it prints every property's
 status, does a real `webhook_log` insert (deleted immediately) and a real
@@ -907,6 +947,7 @@ Grouped by consequence. The first group breaks or leaks if you skip it.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| Bot never replies to anything, not even "hi" | In order of likelihood: the OpenAI account has no billing set up (the deploy log shows 429 `insufficient_quota`); `TELEGRAM_ALLOWED_USERS` is not your numeric user id, so the gateway ignores you; the bot token is wrong (`TELEGRAM_BOT_TOKEN is set: NO` in the deploy log) | Add a payment method or credit at platform.openai.com; re-check the numeric id from section 2; re-copy the token from @BotFather. Redeploy after changing a variable |
 | Bot replies but says it cannot see your budget / never calls a tool | `SUPABASE_URL` or `SUPABASE_SERVICE_KEY` is unset | Set both in the Render dashboard; redeploy |
 | Nightly export never runs, no error either | The Sheets pair is unset, so the export returns `setup_required` and the cron stays silent by design | Nothing to fix unless you want the backup — then section 8 |
 | Webhook accepts transactions you did not make | `WEBHOOK_HMAC_SECRET` was never set | Set it, redeploy, check the boot log for "Webhook secret injected into config" |

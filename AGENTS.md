@@ -45,9 +45,10 @@ look for instead.
    starts chat-only; a parser can come later.)
 2. Do you want email auto-logging now, or chat logging first? (Chat-only
    skips SETUP section 5 entirely and is a fine first day.)
-3. What machine are you on, and do you have git and Python 3.11? (Node and
-   `clasp` are only for pushing the Apps Script from the command line;
-   pasting it into the editor works too.)
+3. What machine are you on, and do you have git and Python? (3.11 is what
+   CI runs; a newer 3.x is normally fine for the tests. Node and `clasp` are
+   only for pushing the Apps Script from the command line; pasting it into
+   the editor works too.)
 4. Which of these accounts do you already have: GitHub, Supabase, Telegram,
    OpenAI, Render?
 
@@ -61,11 +62,23 @@ sections at once. Keep a running checklist in the conversation so either of
 you can see where you are; if the session might end first, write it to
 `notes/setup-progress.md` (the `notes/` folder is gitignored).
 
-**Check every step before the next.** Each stage has a cheap proof. After
-section 0, `pytest tests/ -q` passes. After section 1, the tables exist
-(`select count(*) from budgets;` runs in the SQL editor). After section 3,
-the deploy log shows the `start.sh` lines SETUP lists and the bot answers
-"hi". Then SETUP section 7, in its order, is the acceptance test. When
+**Check every step before the next.** Each stage has a cheap proof.
+
+- After section 0, the tests pass. Make a virtualenv first
+  (`python -m venv .venv`, then `.venv\Scripts\activate` on Windows or
+  `source .venv/bin/activate` elsewhere), run
+  `pip install pytest gspread google-auth cffi`, then
+  `python -m pytest tests/ -q` (a bare `pytest` is often not on PATH).
+- After section 1, SETUP's own check passes
+  (`select count(*) from category_meta;` proves the last migration ran)
+  and `select count(*) from budgets;` is above zero. The budgets seed in
+  1.4 is not optional: without rows for the current month, the test expense
+  in section 7 has no category to land in.
+- After section 3, the deploy log shows the `start.sh` lines SETUP lists,
+  the bot answers "hi", and the two `cp` commands that make `USER.md` and
+  `MEMORY.md` live have been run in the Render shell. You interviewed the
+  person for those files; until that copy the agent never reads them.
+ Then SETUP section 7, in its order, is the acceptance test. When
 something fails, go to SETUP's Troubleshooting table before theorising; most
 first-run failures are already rows in it.
 
@@ -82,10 +95,9 @@ first-run failures are already rows in it.
   so `schema.sql` and the test that pins it stay in step), `WEBHOOK_URL` and
   `RENDER_SERVICE_ID` in `apps-script/Code.gs`, and the Supabase URL and
   publishable-key placeholders in `pwa/index.html` and `pwa/budget.html`;
-- generate the webhook secret (`openssl rand -hex 32`, or
-  `python -c "import secrets; print(secrets.token_hex(32))"`) for them to
-  paste into Render and the Script Properties;
-- commit and push to THEIR repository, never to `alhazjm/kevin-agent`.
+- commit and push to THEIR repository, never to `alhazjm/kevin-agent`. Push
+  the memory-files commit before they create the Render service: Render
+  builds what is on GitHub, and the build fails at `COPY` without them.
 
 **What only the person can do** (give click-level directions, then wait):
 create accounts; talk to @BotFather; paste SQL into the Supabase SQL editor;
@@ -95,7 +107,11 @@ approve the Google permission prompt; sign in to the dashboard by email OTP.
 
 **Secrets.** You never need to see one. Tokens and keys go straight from the
 provider's page into Render's environment variables or the Apps Script's
-Script Properties. Do not ask the person to paste a secret into the chat, do
+Script Properties. That includes the webhook secret: give the person the
+command (`openssl rand -hex 32`, or
+`python -c "import secrets; print(secrets.token_hex(32))"`) to run in their
+own terminal, and have them paste the output into Render and the Script
+Properties. Do not run it yourself; your transcript is not a secret store. Do not ask the person to paste a secret into the chat, do
 not write one into any tracked file, and if one lands in a commit, tell them
 to rotate it rather than trying to scrub history. The dashboard holds only
 the PUBLIC publishable key; the service key must never appear under `pwa/`.
@@ -104,7 +120,9 @@ the PUBLIC publishable key; the service key must never appear under `pwa/`.
 that carry a name, a household and card last-4s. A GitHub fork of a public
 repository is always public, so do not let them use the Fork button: clone,
 create an empty PRIVATE repository, and push there (SETUP section 0 has the
-commands). Check this before the first `git push`.
+commands). Check it before anything personal is pushed:
+`gh repo view --json visibility` says `PRIVATE`, or the repository's URL
+opened in a private browser window gives a 404.
 
 **Rules from the rest of this manual that bite during setup.**
 
@@ -252,7 +270,7 @@ pwa/                           # Static PWA dashboard (separate Render Static Si
 recon/                         # Local statement-recon CLI (pypdf, checksum-gated parsers) — never ships
 scripts/                       # setup-google-oauth.sh (optional Sheet backup), summarize_llm_usage.py
 samples/                       # GITIGNORED — real e-statement PDFs live here, never committed
-tests/                         # 654 tests across 11 files; see "Testing"
+tests/                         # 657 tests across 12 files; see "Testing"
 LICENSE                        # MIT
 CHANGELOG.md                   # Dated, human-readable
 .github/workflows/             # ci.yml (pytest + scrub gate) and anchor-check.yml (weekly upstream test)
@@ -692,6 +710,14 @@ Sheet export tools, so Google Cloud is optional for a cloner.
   (`restartRenderService` + `RENDER_API_KEY`) — memory hygiene for the
   512MB container; its trigger is created once by hand
   (`setupRestartTrigger`).
+- `appsscript.json` lists EXPLICIT `oauthScopes`, which switches off Apps
+  Script's auto-detection: the script is granted exactly that list. A new
+  Apps Script service in `Code.gs` (`DriveApp`, `CalendarApp`, …) needs its
+  scope added to the manifest in the same commit, or the call throws a
+  permission error at run time — `tests/test_apps_script_manifest.py` fails
+  until both sides agree. (The manifest lacked `script.scriptapp` from the
+  first commit until 2026-09-20; the original deployment never noticed
+  because it was pasted into the editor without the manifest.)
 - HMAC: `X-Webhook-Signature` = lowercase-hex HMAC-SHA256 of the exact
   `JSON.stringify(payload)` string, bytes masked `& 0xFF`.
 - Currency is captured dynamically (`[A-Z]{3}`) — hard-coding SGD silently
@@ -944,7 +970,8 @@ windows on the same tile. Cap bands: ok <80%, warning 80–99%, capped
 5. **Env vars** (render.yaml lists them; secrets `sync: false`):
    `OPENAI_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON` (the full JSON blob —
    start.sh writes it to `/data/service-account.json`; a file PATH in
-   local dev), `GSPREAD_SPREADSHEET_ID` (still needed — nightly export),
+   local dev), `GSPREAD_SPREADSHEET_ID` (both Google variables are optional in this repo:
+   they only switch on the nightly Sheet export),
    `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `WEBHOOK_HMAC_SECRET`,
    `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USERS`, plus non-secret
    `PEHD_LLM_USAGE_DIR=/data/llm_usage`. start.sh sed-replaces TWO
@@ -980,16 +1007,18 @@ pytest tests/test_travel_mode.py              # one file
 pytest tests/ -k "idempotency"                # by keyword
 ```
 
-Current count: **654 passing** across eleven files:
+Current count: **657 passing** across twelve files:
 `test_expense_sheets_tool` (also covers `sheets_client`),
 `test_supabase_client`, `test_card_optimiser`, `test_travel_mode`,
 `test_loans`, `test_email_parser` (the Apps Script mirror, M16),
 `test_statement_recon`, `test_skill_bundles` (the slash-command bundles:
 every listed skill exists, the Dockerfile ships the dir),
 `test_sheets_optional` (Google Sheets stays optional),
-`test_schema_consolidation` (`schema.sql` matches the migrations) and
+`test_schema_consolidation` (`schema.sql` matches the migrations),
 `test_docs` (Mermaid blocks render, relative links and heading anchors
-resolve, the README stays short). State the new total in every PR body; CI runs the same suite on every push.
+resolve, the README stays short) and `test_apps_script_manifest` (every
+Apps Script service `Code.gs` calls has its OAuth scope in
+`appsscript.json`). State the new total in every PR body; CI runs the same suite on every push.
 
 ## Checklists
 

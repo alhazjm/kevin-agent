@@ -4,6 +4,32 @@ Human-readable, dated. Each entry is what changed *for someone running their
 own copy*, not a commit log. The private deployment this repo is exported
 from moves faster than this file; entries land here at each sync.
 
+## 2026-09-20 — A shorter front door, and a repo an agent can pick up cold
+
+- **The README is a third of its length.** The build story and the
+  architecture moved, unchanged, to [docs/BUILD-STORY.md](docs/BUILD-STORY.md)
+  and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Point a coding agent at the repo and ask it to walk you through
+  setup.** `AGENTS.md` now opens with a walkthrough protocol (four opening
+  questions, one SETUP section at a time, a proof per stage, never a secret
+  in the chat), and the README carries the prompt to paste.
+- **Make a PRIVATE copy, not a fork.** SETUP section 0 used to say "fork",
+  then had you commit files holding your name and card last-4s. A fork of a
+  public repo is public. It now gives the commands for a private copy.
+- **Apps Script manifest: two missing OAuth scopes added**
+  (`script.scriptapp`, `spreadsheets`). With the old manifest,
+  `setupTrigger()` — a required step — would have failed with a permission
+  error for anyone who pasted the manifest or used `clasp push`. If you
+  already deployed with the old manifest and your triggers exist, nothing
+  to do; otherwise re-paste `appsscript.json` and re-run `setupTrigger()`.
+- **SETUP corrections from a cold-start walkthrough:** seeding `budgets` is
+  required, not optional (and the seed SQL now uses the current month);
+  `schema.sql` is for a fresh project (`0001` is not re-runnable); an explicit
+  step to make `USER.md` / `MEMORY.md` live on the disk; OpenAI billing, the
+  bank's alert threshold, and a "bot never replies" troubleshooting row.
+- A test now parses the docs (Mermaid blocks, relative links, heading
+  anchors) after a stray semicolon broke the README's diagram on GitHub.
+
 ## 2026-09-05 — Sync: hermes-agent 0.21.0, the token diet, and the build that stopped being fragile
 
 **Upstream pin: hermes-agent 0.10.0 → 0.21.0** (four and a half months, ~19k
