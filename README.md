@@ -45,7 +45,7 @@ sequenceDiagram
     Note over G,DB: written BEFORE the send — emails are<br/>marked read and there is no retry
     G->>K: HMAC-signed POST /webhooks/expense-ingest
     K->>DB: merchant_map lookup · active trip?
-    Note over K: learned mapping → LLM judgment;<br/>trip routing is deterministic, in the tool
+    Note over K: learned mapping → LLM judgment<br/>trip routing is deterministic, in the tool
     K->>DB: insert, on_conflict=idempotency_key
     DB-->>K: txn_id — or "duplicate", and the flow stops here
     K->>T: confirmation bubble
