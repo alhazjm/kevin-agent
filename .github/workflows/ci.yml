@@ -8,6 +8,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -37,13 +40,31 @@ jobs:
           bash -n scripts/setup-google-oauth.sh
 
       - name: No personal data in the tree
-        # The scrub gate. These strings belong to the original deployment
-        # and must never reappear in the public tree. Add your own here if
-        # you fork and later publish.
+        # The scrub gate. The identifiers of the original deployment live in
+        # the repository secret SCRUB_PATTERN (an extended regex), so this
+        # file does not publish the strings it guards. On the canonical repo
+        # a missing secret fails the job, and so does a pattern grep cannot
+        # run (for example an invalid regex). Forks, fork pull requests and
+        # Dependabot runs receive no secrets, so the gate skips there. If you
+        # fork and later publish, set your own SCRUB_PATTERN.
+        env:
+          SCRUB_PATTERN: ${{ secrets.SCRUB_PATTERN }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
-          set -e
-          if grep -rInE "hadialhazim|jfrknoykalgrucizjszs|personal-expense-hermes-deploy\.onrender|\bHadi\b|\b(haku|nabs)\b" \
-               --exclude-dir=.git --exclude-dir=.github . ; then
-            echo "::error::personal identifiers found in the tree"; exit 1
+          if [ -z "$SCRUB_PATTERN" ]; then
+            if [ "$GITHUB_REPOSITORY" = "alhazjm/kevin-agent" ] && [ "$IS_FORK_PR" != "true" ] && [ "$GITHUB_ACTOR" != "dependabot[bot]" ]; then
+              echo "::error::SCRUB_PATTERN secret is missing"; exit 1
+            fi
+            echo "::notice::scrub gate skipped: SCRUB_PATTERN is not set"; exit 0
           fi
-          echo "scrub gate clean"
+          # -l prints file names only, so a match never echoes the value.
+          # grep exits 0 on a match, 1 on no match, 2 when it cannot run.
+          set +e
+          grep -rlIE -e "$SCRUB_PATTERN" --exclude-dir=.git .
+          rc=$?
+          set -e
+          case $rc in
+            0) echo "::error::personal identifiers found in the files listed above"; exit 1 ;;
+            1) echo "scrub gate clean" ;;
+            *) echo "::error::scrub gate could not run (grep exit $rc); check that SCRUB_PATTERN is a valid extended regex"; exit 1 ;;
+          esac

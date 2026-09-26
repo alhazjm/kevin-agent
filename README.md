@@ -1,7 +1,6 @@
 # Kevin — a personal-finance agent
 
 [![CI](https://github.com/alhazjm/kevin-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/alhazjm/kevin-agent/actions/workflows/ci.yml)
-[![Upstream anchor check](https://github.com/alhazjm/kevin-agent/actions/workflows/anchor-check.yml/badge.svg)](https://github.com/alhazjm/kevin-agent/actions/workflows/anchor-check.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Bank emails → Gmail webhook → tool-calling LLM agent → Postgres ledger → Telegram replies + a receipt-styled PWA dashboard. A personal-finance agent built for the Singapore context (DBS/UOB/HSBC email shapes, SGD, the local card-rewards game), deployed on a $7/mo Render box.
