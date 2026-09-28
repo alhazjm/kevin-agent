@@ -880,7 +880,7 @@ Grouped by consequence. The first group breaks or leaks if you skip it.
 | `render.yaml` | Service name and `region: singapore` |
 | `cron/setup-cron-jobs.sh` | Schedules and the prompts' tone |
 | `skills/*/SKILL.md` | Worked examples use fictional people and categories. Harmless, but they are prompts the model reads |
-| `.github/workflows/ci.yml` | The scrub-gate strings are the original deployment's; add your own if you later publish a fork |
+| `.github/workflows/ci.yml` | The scrub gate reads an extended regex from the repository secret `SCRUB_PATTERN` and fails on the canonical repo if it is missing; if you later publish a fork, set your own under Settings → Secrets and variables → Actions |
 
 ---
 

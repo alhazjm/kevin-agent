@@ -4,6 +4,24 @@ Human-readable, dated. Each entry is what changed *for someone running their
 own copy*, not a commit log. The private deployment this repo is exported
 from moves faster than this file; entries land here at each sync.
 
+## 2026-09-27 — CI housekeeping
+
+- **The scrub gate reads its pattern from a secret.** The gate now takes an
+  extended regex from the repository secret `SCRUB_PATTERN` instead of a
+  pattern written into `ci.yml`. It prints only file names on a match, scans
+  `.github/` too, and fails if grep cannot run (an invalid regex no longer
+  passes silently). Forks, fork pull requests and Dependabot runs receive no
+  secrets, so the gate skips there. If you fork and later publish your copy,
+  set your own `SCRUB_PATTERN` under Settings → Secrets and variables →
+  Actions. `ci.yml` also now runs with a read-only token.
+- **The weekly anchor check downloads through the GitHub API.** The
+  anonymous `raw.githubusercontent.com` endpoint rate-limited the shared
+  runners (HTTP 429) and failed the job before any check ran. The job now
+  uses the authenticated contents API with the workflow token, and it keeps
+  one report open, closing the reports for older upstream tags.
+  `docs/UPGRADING-HERMES.md` step b uses the same download for the manual
+  path. Nothing to do on your side.
+
 ## 2026-09-05 — Sync: hermes-agent 0.21.0, the token diet, and the build that stopped being fragile
 
 **Upstream pin: hermes-agent 0.10.0 → 0.21.0** (four and a half months, ~19k
