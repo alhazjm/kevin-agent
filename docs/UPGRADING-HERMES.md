@@ -115,18 +115,23 @@ release notes. Words to search for: *silence*, *cron*, *toolset*,
 *platform*, *slash command*, *bundle*, *auxiliary*, *background*,
 *telegram*, *webhook*.
 
-**b. Download the files the checks need.** Anonymous `raw.githubusercontent.com`
-is fine for a handful of files:
+**b. Download the files the checks need.** Use the authenticated GitHub API
+through `gh`; the anonymous `raw.githubusercontent.com` endpoint rate-limits
+(HTTP 429) often enough to break the loop:
 
 ```bash
-S=<sha>; U=https://raw.githubusercontent.com/NousResearch/hermes-agent/$S
+S=<sha>; R=repos/NousResearch/hermes-agent/contents
 mkdir -p up/agent up/gateway up/cron up/hermes_cli up/tools
 for f in agent/conversation_loop.py gateway/response_filters.py gateway/run.py \
          agent/skill_bundles.py cron/scheduler.py hermes_cli/config_defaults.py \
          pyproject.toml model_tools.py tools/registry.py; do
-  curl -fsSL "$U/$f" -o "up/$f"
+  gh api -H "Accept: application/vnd.github.raw" "$R/$f?ref=$S" > "up/$f"
 done
 ```
+
+Without `gh`, swap the download line for
+`curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/$S/$f" -o "up/$f"`;
+it works when you are not being rate-limited.
 
 **c. Dry-run both patches against the downloaded loop.** They honour
 `PEHD_PATCH_TARGET`, so nothing touches the repo:
