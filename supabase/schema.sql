@@ -12,9 +12,11 @@
 -- always a NEW numbered file — never an edit to this one, and never a
 -- re-squash. Regenerate this file in the same commit.
 --
--- Every statement is idempotent (create table if not exists, add column if
--- not exists, and the do $$ ... duplicate_object policy pattern), so
--- running this more than once is safe.
+-- For a FRESH project. 0002 onward are idempotent (create table if not
+-- exists, add column if not exists, and the do $$ ... duplicate_object
+-- policy pattern), but 0001's owner_read loop is a bare create policy, so a
+-- second run stops there with "policy already exists". On a database that
+-- already exists, run only the numbered migrations it has not seen.
 --
 -- BEFORE YOU RUN IT: change the email address in is_owner() to the one you
 -- will sign into the dashboard with. Every row-level-security policy calls
